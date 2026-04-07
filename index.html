@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0" />
+    
+    <!-- SEO 메타 태그 -->
+    <meta name="description" content="학술회의 eBook 플랫폼 - 다양한 학술대회의 발표 자료를 모바일로 열람하세요" />
+    <meta name="keywords" content="학술회의, eBook, 발표자료, 학술대회, 콘퍼런스" />
+    <meta name="author" content="학술회의 eBook 플랫폼" />
+    
+    <!-- 접근성 메타 태그 -->
+    <meta name="theme-color" content="#3b82f6" />
+    <meta name="color-scheme" content="light dark" />
+    
+    <!-- PWA 관련 메타 태그 -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="학술회의 eBook" />
+    
+    <title>학술회의 eBook 라이브러리</title>
+    
+    <script type="module">
+      if (import.meta.hot?.on) {
+        import.meta.hot.on('vite:error', (error) => {
+          if (error.err) {
+            console.error(
+              [error.err.message, error.err.frame].filter(Boolean).join('\n'),
+            )
+          }
+        })
+      }
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

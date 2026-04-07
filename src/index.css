@@ -1,0 +1,156 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
+  line-height: 1.6;
+  font-weight: 400;
+  font-size: 16px; /* 기본 글자 크기 증가 - 접근성 개선 */
+
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+
+  /* Brand Colors - default blue theme */
+  --brand-primary: #3b82f6;
+  --brand-primary-light: #dbeafe;
+  --brand-primary-hover: #2563eb;
+  --brand-primary-dark: #1d4ed8;
+  --brand-secondary: #8b5cf6;
+  --brand-secondary-light: #ede9fe;
+}
+
+.dark {
+  --brand-primary-light: #1e3a5f;
+  --brand-primary-dark: #60a5fa;
+  --brand-secondary-light: #2d1b69;
+}
+
+/* 접근성 강화 - 포커스 스타일 개선 */
+*:focus-visible {
+  outline: 3px solid #3b82f6 !important;
+  outline-offset: 2px !important;
+}
+
+/* 버튼과 링크의 최소 터치 타겟 크기 보장 */
+button, a, [role="button"] {
+  min-height: 44px;
+  min-width: 44px;
+}
+
+/* 텍스트 선택 색상 개선 */
+::selection {
+  background-color: #3b82f6;
+  color: white;
+}
+
+::-moz-selection {
+  background-color: #3b82f6;
+  color: white;
+}
+
+/* 스크롤바 스타일링 - 모바일에서 더 보기 좋게 */
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+/* 커스텀 스크롤바 (데스크톱) */
+::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f1f1;
+  border-radius: 6px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #888;
+  border-radius: 6px;
+  border: 3px solid #f1f1f1;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #555;
+}
+
+/* 다크 모드 스크롤바 */
+.dark ::-webkit-scrollbar-track {
+  background: #374151;
+}
+
+.dark ::-webkit-scrollbar-thumb {
+  background: #6b7280;
+  border: 3px solid #374151;
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: #9ca3af;
+}
+
+/* 입력 필드 자동 확대 방지 (모바일) */
+input[type="text"],
+input[type="email"],
+input[type="password"],
+input[type="number"],
+textarea,
+select {
+  font-size: 16px;
+}
+
+/* 더 나은 텍스트 대비율 */
+.text-high-contrast {
+  color: #1f2937;
+}
+
+.dark .text-high-contrast {
+  color: #f9fafb;
+}
+
+/* 애니메이션 감소 설정 (접근성) */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* 스플래시 스크린 애니메이션 */
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes fade-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in {
+  animation: fade-in 0.6s ease-out;
+}
+
+.animate-fade-in-up {
+  animation: fade-in-up 0.6s ease-out 0.2s both;
+}
