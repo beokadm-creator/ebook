@@ -12,7 +12,9 @@ import {
   CalendarIcon,
   MapPinIcon,
   UserGroupIcon,
-  XMarkIcon
+  XMarkIcon,
+  ChevronDownIcon,
+  ChevronUpIcon
 } from '@heroicons/react/24/outline';
 
 export const ConferenceManagement: React.FC = () => {
@@ -212,6 +214,7 @@ interface ConferenceFormProps {
 }
 
 const ConferenceForm: React.FC<ConferenceFormProps> = ({ conference, onSubmit, onClose }) => {
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const [formData, setFormData] = useState({
     name: { ko: '', en: '' } as BilingualValue,
     description: { ko: '', en: '' } as BilingualValue,
@@ -219,7 +222,7 @@ const ConferenceForm: React.FC<ConferenceFormProps> = ({ conference, onSubmit, o
     endDate: '',
     venue: { ko: '', en: '' } as BilingualValue,
     organizer: '',
-    status: 'draft' as 'draft' | 'published',
+    status: 'published' as 'draft' | 'published',
     branding: {
       primaryColor: '#3b82f6',
       secondaryColor: '#8b5cf6',
@@ -254,243 +257,165 @@ const ConferenceForm: React.FC<ConferenceFormProps> = ({ conference, onSubmit, o
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
-      <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-y-auto m-4">
-        <div className="sticky top-0 bg-white dark:bg-gray-800 border-b-2 border-gray-200 dark:border-gray-700 px-6 py-4 flex items-center justify-between">
-          <h3 className="text-xl font-bold text-gray-900 dark:text-gray-100">
-            {conference ? '학술대회 편집' : '새 학술대회'}
-          </h3>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+      <div className="bg-white dark:bg-gray-800 rounded-3xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto m-4 border border-gray-100 dark:border-gray-700">
+        <div className="sticky top-0 z-10 bg-white/80 dark:bg-gray-800/80 backdrop-blur-md border-b border-gray-100 dark:border-gray-700 px-8 py-6 flex items-center justify-between">
+          <div>
+            <h3 className="text-2xl font-black text-gray-900 dark:text-gray-100 tracking-tight">
+              {conference ? '학술대회 수정' : '새 학술대회 등록'}
+            </h3>
+            <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">간편하게 기본 정보를 입력하여 시작하세요.</p>
+          </div>
           <button
             onClick={onClose}
-            className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
+            className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-full transition-all duration-200"
           >
-            <XMarkIcon className="w-6 h-6" />
+            <XMarkIcon className="w-6 h-6 text-gray-400 hover:text-gray-600" />
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="p-6 space-y-6">
-          {/* 학술대회명 */}
-          <BilingualInput
-            label="학술대회명"
-            value={formData.name}
-            onChange={(value) => setFormData({ ...formData, name: value })}
-            placeholder={{
-              ko: '예: 2024년 대한치과학회 춘계학술대회',
-              en: 'Example: 2024 Korean Academy of Dental Science Spring Conference'
-            }}
-            required
-          />
-
-          {/* 설명 */}
-          <BilingualInput
-            label="설명"
-            value={formData.description}
-            onChange={(value) => setFormData({ ...formData, description: value })}
-            placeholder={{
-              ko: '학술대회에 대한 설명을 입력하세요...',
-              en: 'Enter conference description...'
-            }}
-            required
-            multiline
-            rows={3}
-          />
-
-          {/* 날짜 */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-base font-bold text-gray-900 dark:text-gray-100 mb-2">
-                시작일 <span className="text-red-500">*</span>
-              </label>
-              <input
-                type="date"
-                value={formData.startDate}
-                onChange={(e) => setFormData({ ...formData, startDate: e.target.value })}
-                required
-                className="w-full px-4 py-3 bg-white dark:bg-gray-900 border-2 border-gray-200 dark:border-gray-700 rounded-xl focus:border-brand-primary focus:ring-2 focus:ring-brand-primary-light focus:outline-none text-gray-900 dark:text-gray-100"
-              />
-            </div>
-            <div>
-              <label className="block text-base font-bold text-gray-900 dark:text-gray-100 mb-2">
-                종료일 <span className="text-red-500">*</span>
-              </label>
-              <input
-                type="date"
-                value={formData.endDate}
-                onChange={(e) => setFormData({ ...formData, endDate: e.target.value })}
-                required
-                min={formData.startDate}
-                className="w-full px-4 py-3 bg-white dark:bg-gray-900 border-2 border-gray-200 dark:border-gray-700 rounded-xl focus:border-brand-primary focus:ring-2 focus:ring-brand-primary-light focus:outline-none text-gray-900 dark:text-gray-100"
-              />
-            </div>
-          </div>
-
-          {/* 장소 */}
-          <BilingualInput
-            label="장소"
-            value={formData.venue}
-            onChange={(value) => setFormData({ ...formData, venue: value })}
-            placeholder={{
-              ko: '예: COEX 그랜드볼룸',
-              en: 'Example: COEX Grand Ballroom'
-            }}
-            required
-          />
-
-          {/* 주최 기관 */}
-          <div>
-            <label className="block text-base font-bold text-gray-900 dark:text-gray-100 mb-2">
-              주최 기관 <span className="text-red-500">*</span>
-            </label>
-            <input
-              type="text"
-              value={formData.organizer}
-              onChange={(e) => setFormData({ ...formData, organizer: e.target.value })}
-              placeholder="예: 대한치과학회"
+        <form onSubmit={handleSubmit} className="p-8 space-y-8">
+          {/* 주요 정보 섹션 */}
+          <div className="space-y-6">
+            <BilingualInput
+              label="학술대회 명칭"
+              value={formData.name}
+              onChange={(value) => setFormData({ ...formData, name: value })}
+              placeholder={{
+                ko: '예: 2024년 정기 학술대회',
+                en: 'Example: 2024 Annual Conference'
+              }}
               required
-              className="w-full px-4 py-3 bg-white dark:bg-gray-900 border-2 border-gray-200 dark:border-gray-700 rounded-xl focus:border-brand-primary focus:ring-2 focus:ring-brand-primary-light focus:outline-none text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500"
             />
-          </div>
 
-          {/* 상태 */}
-          <div>
-            <label className="block text-base font-bold text-gray-900 dark:text-gray-100 mb-2">
-              상태
-            </label>
-            <div className="flex gap-3">
-              <button
-                type="button"
-                onClick={() => setFormData({ ...formData, status: 'draft' })}
-                className={`flex-1 px-4 py-3 rounded-xl font-bold transition-colors ${
-                  formData.status === 'draft'
-                    ? 'bg-yellow-500 text-white'
-                    : 'bg-gray-100 dark:bg-gray-700 text-gray-900 dark:text-gray-100 hover:bg-gray-200 dark:hover:bg-gray-600'
-                }`}
-              >
-                임시저장
-              </button>
-              <button
-                type="button"
-                onClick={() => setFormData({ ...formData, status: 'published' })}
-                className={`flex-1 px-4 py-3 rounded-xl font-bold transition-colors ${
-                  formData.status === 'published'
-                    ? 'bg-green-500 text-white'
-                    : 'bg-gray-100 dark:bg-gray-700 text-gray-900 dark:text-gray-100 hover:bg-gray-200 dark:hover:bg-gray-600'
-                }`}
-              >
-                게시
-              </button>
-            </div>
-          </div>
-
-          {/* 브랜딩 설정 */}
-          <div>
-            <label className="block text-base font-bold text-gray-900 dark:text-gray-100 mb-3">
-              브랜딩 설정
-            </label>
-            <div className="p-4 bg-gray-50 dark:bg-gray-900 rounded-xl border-2 border-gray-200 dark:border-gray-700">
-              <div className="space-y-4">
-                {/* 기본 색상 */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                    기본 색상
-                  </label>
-                  <div className="flex gap-3">
-                    <input
-                      type="color"
-                      value={formData.branding.primaryColor}
-                      onChange={(e) => setFormData({
-                        ...formData,
-                        branding: { ...formData.branding, primaryColor: e.target.value }
-                      })}
-                      className="w-20 h-12 rounded-lg cursor-pointer border-2 border-gray-200 dark:border-gray-700"
-                    />
-                    <input
-                      type="text"
-                      value={formData.branding.primaryColor}
-                      onChange={(e) => setFormData({
-                        ...formData,
-                        branding: { ...formData.branding, primaryColor: e.target.value }
-                      })}
-                      placeholder="#3b82f6"
-                      className="flex-1 px-4 py-3 bg-white dark:bg-gray-900 border-2 border-gray-200 dark:border-gray-700 rounded-xl focus:border-brand-primary focus:outline-none text-gray-900 dark:text-gray-100"
-                    />
-                  </div>
-                </div>
-
-                {/* 보조 색상 */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                    보조 색상
-                  </label>
-                  <div className="flex gap-3">
-                    <input
-                      type="color"
-                      value={formData.branding.secondaryColor}
-                      onChange={(e) => setFormData({
-                        ...formData,
-                        branding: { ...formData.branding, secondaryColor: e.target.value }
-                      })}
-                      className="w-20 h-12 rounded-lg cursor-pointer border-2 border-gray-200 dark:border-gray-700"
-                    />
-                    <input
-                      type="text"
-                      value={formData.branding.secondaryColor}
-                      onChange={(e) => setFormData({
-                        ...formData,
-                        branding: { ...formData.branding, secondaryColor: e.target.value }
-                      })}
-                      placeholder="#8b5cf6"
-                      className="flex-1 px-4 py-3 bg-white dark:bg-gray-900 border-2 border-gray-200 dark:border-gray-700 rounded-xl focus:border-brand-primary focus:outline-none text-gray-900 dark:text-gray-100"
-                    />
-                  </div>
-                </div>
-
-                {/* 로고 URL */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                    로고 URL
-                  </label>
-                  <input
-                    type="url"
-                    value={formData.branding.logoUrl}
-                    onChange={(e) => setFormData({
-                      ...formData,
-                      branding: { ...formData.branding, logoUrl: e.target.value }
-                    })}
-                    placeholder="https://example.com/logo.png"
-                    className="w-full px-4 py-3 bg-white dark:bg-gray-900 border-2 border-gray-200 dark:border-gray-700 rounded-xl focus:border-brand-primary focus:outline-none text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500"
-                  />
-                </div>
-
-                {/* 이벤트명 */}
-                <BilingualInput
-                  label="이벤트명"
-                  value={formData.branding.eventName}
-                  onChange={(value) => setFormData({
-                    ...formData,
-                    branding: { ...formData.branding, eventName: value }
-                  })}
-                  placeholder={{
-                    ko: '예: 2024년 춘계학술대회',
-                    en: 'Example: 2024 Spring Conference'
-                  }}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div>
+                <label className="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-2 uppercase tracking-wider">
+                  시작일
+                </label>
+                <input
+                  type="date"
+                  value={formData.startDate}
+                  onChange={(e) => setFormData({ ...formData, startDate: e.target.value })}
+                  required
+                  className="w-full px-5 py-4 bg-gray-50 dark:bg-gray-900 border-2 border-transparent focus:border-brand-primary focus:bg-white dark:focus:bg-gray-950 rounded-2xl transition-all duration-200 text-gray-900 dark:text-gray-100 font-medium outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-2 uppercase tracking-wider">
+                  종료일
+                </label>
+                <input
+                  type="date"
+                  value={formData.endDate}
+                  onChange={(e) => setFormData({ ...formData, endDate: e.target.value })}
+                  required
+                  min={formData.startDate}
+                  className="w-full px-5 py-4 bg-gray-50 dark:bg-gray-900 border-2 border-transparent focus:border-brand-primary focus:bg-white dark:focus:bg-gray-950 rounded-2xl transition-all duration-200 text-gray-900 dark:text-gray-100 font-medium outline-none"
                 />
               </div>
             </div>
           </div>
 
-          {/* 버튼 */}
-          <div className="flex gap-3 pt-4 border-t-2 border-gray-200 dark:border-gray-700">
+          {/* 상세 설정 토글 */}
+          <div className="pt-4">
+            <button
+              type="button"
+              onClick={() => setShowAdvanced(!showAdvanced)}
+              className="flex items-center gap-2 text-brand-primary hover:text-brand-primary-hover font-bold text-sm transition-colors"
+            >
+              {showAdvanced ? (
+                <>상세 설정 닫기 <ChevronUpIcon className="w-4 h-4" /></>
+              ) : (
+                <>상세 정보(장소, 주최사 등) 추가하기 <ChevronDownIcon className="w-4 h-4" /></>
+              )}
+            </button>
+          </div>
+
+          {showAdvanced && (
+            <div className="space-y-8 pt-4 border-t border-gray-100 dark:border-gray-700 animate-in fade-in slide-in-from-top-4 duration-300">
+              <BilingualInput
+                label="상세 설명"
+                value={formData.description}
+                onChange={(value) => setFormData({ ...formData, description: value })}
+                placeholder={{
+                  ko: '행사에 대한 짧은 소개글을 입력하세요.',
+                  en: 'Short introduction about the event.'
+                }}
+                multiline
+                rows={2}
+              />
+
+              <BilingualInput
+                label="개최 장소"
+                value={formData.venue}
+                onChange={(value) => setFormData({ ...formData, venue: value })}
+                placeholder={{
+                  ko: '예: 서울 코엑스',
+                  en: 'Example: COEX, Seoul'
+                }}
+              />
+
+              <div>
+                <label className="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-2 uppercase tracking-wider">
+                  주최 기관
+                </label>
+                <input
+                  type="text"
+                  value={formData.organizer}
+                  onChange={(e) => setFormData({ ...formData, organizer: e.target.value })}
+                  placeholder="예: 한국학술협회"
+                  className="w-full px-5 py-4 bg-gray-50 dark:bg-gray-900 border-2 border-transparent focus:border-brand-primary focus:bg-white dark:focus:bg-gray-950 rounded-2xl transition-all duration-200 text-gray-900 dark:text-gray-100 font-medium outline-none"
+                />
+              </div>
+
+              {/* 브랜딩 */}
+              <div>
+                <label className="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-4 uppercase tracking-wider">
+                  브랜딩 및 테마 색상 (선택사항)
+                </label>
+                <div className="grid grid-cols-2 gap-4 p-4 bg-gray-50 dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-700">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-2">기본 색상</label>
+                    <input
+                      type="color"
+                      value={formData.branding.primaryColor}
+                      onChange={(e) => setFormData({
+                        ...formData,
+                        branding: { ...formData.branding, primaryColor: e.target.value }
+                      })}
+                      className="w-full h-10 rounded-lg cursor-pointer bg-transparent"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-2">보조 색상</label>
+                    <input
+                      type="color"
+                      value={formData.branding.secondaryColor}
+                      onChange={(e) => setFormData({
+                        ...formData,
+                        branding: { ...formData.branding, secondaryColor: e.target.value }
+                      })}
+                      className="w-full h-10 rounded-lg cursor-pointer bg-transparent"
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* 저장 버튼 */}
+          <div className="flex gap-4 pt-8">
             <button
               type="submit"
-              className="flex-1 px-6 py-3 bg-brand-primary hover:bg-brand-primary-hover text-white rounded-xl font-bold transition-colors"
+              className="flex-1 px-8 py-5 bg-brand-primary hover:bg-brand-primary-hover text-white rounded-2xl font-black text-lg transition-all duration-200 shadow-xl shadow-brand-primary/20 active:scale-[0.98]"
             >
-              {conference ? '업데이트' : '생성'}
+              {conference ? '수정 완료' : '학술대회 등록하기'}
             </button>
             <button
               type="button"
               onClick={onClose}
-              className="flex-1 px-6 py-3 bg-gray-100 dark:bg-gray-700 text-gray-900 dark:text-gray-100 rounded-xl font-bold hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
+              className="px-8 py-5 bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 rounded-2xl font-bold hover:bg-gray-200 dark:hover:bg-gray-600 transition-all duration-200"
             >
               취소
             </button>

@@ -17,6 +17,7 @@ export interface ParsingState {
 
 export interface UploadMetadata {
   conferenceId: string;
+  publicationId?: string;
   publicationType: 'abstract' | 'poster' | 'presentation';
   userId: string;
 }
@@ -66,6 +67,7 @@ export const useDocumentParsingState = (metadata: UploadMetadata) => {
         contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
         customMetadata: {
           conferenceId: metadata.conferenceId,
+          publicationId: metadata.publicationId || '',
           publicationType: metadata.publicationType,
           userId: metadata.userId,
           originalFileName: file.name

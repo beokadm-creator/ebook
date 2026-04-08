@@ -130,13 +130,15 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
     >
       <div className="flex items-start gap-3">
         {/* 드래그 핸들 */}
-        <button
-          {...attributes}
-          {...listeners}
-          className="mt-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
-        >
-          <ArrowsUpDownIcon className="w-5 h-5" />
-        </button>
+        {!(block.style?.locked) && (
+          <button
+            {...attributes}
+            {...listeners}
+            className="mt-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+          >
+            <ArrowsUpDownIcon className="w-5 h-5" />
+          </button>
+        )}
 
         {/* 블록 아이콘 및 미리보기 */}
         <div className="flex-1">
@@ -161,13 +163,15 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
           >
             <PencilIcon className="w-5 h-5" />
           </button>
-          <button
-            onClick={onDelete}
-            className="p-2 text-gray-400 hover:text-red-600 dark:hover:text-red-400 transition-colors"
-            title="삭제"
-          >
-            <TrashIcon className="w-5 h-5" />
-          </button>
+          {!(block.style?.locked) && (
+            <button
+              onClick={onDelete}
+              className="p-2 text-gray-400 hover:text-red-600 dark:hover:text-red-400 transition-colors"
+              title="삭제"
+            >
+              <TrashIcon className="w-5 h-5" />
+            </button>
+          )}
         </div>
       </div>
     </div>
@@ -186,6 +190,7 @@ const BlockEditor: React.FC<BlockEditorProps> = ({
   const [blocks, setBlocks] = useState<ContentType[]>(initialBlocks);
   const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
+
 
   const sensors = useSensors(
     useSensor(PointerSensor),
@@ -237,11 +242,9 @@ const BlockEditor: React.FC<BlockEditorProps> = ({
     setSelectedBlockId(newBlock.id);
   };
 
-  const handleUpdateBlock = (blockId: string, updates: { content: ContentType['content'] }) => {
+  const handleUpdateBlock = (blockId: string, updates: Partial<ContentType>) => {
     setBlocks((prev) =>
-      prev.map((block) =>
-        block.id === blockId ? ({ ...block, content: updates.content } as ContentType) : block
-      )
+      prev.map((block) => (block.id === blockId ? { ...block, ...updates } as ContentType : block))
     );
   };
 

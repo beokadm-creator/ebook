@@ -19,8 +19,8 @@ interface ViewerState extends ViewerSettings {
 
 const DEFAULT_SETTINGS: ViewerSettings = {
   darkMode: false,
-  fontSize: 16,
-  lineHeight: 1.6,
+  fontSize: 18,
+  lineHeight: 1.8,
   letterSpacing: 0,
   fontFamily: 'Pretendard'
 };

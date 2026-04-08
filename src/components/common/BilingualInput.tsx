@@ -27,6 +27,93 @@ interface BilingualInputProps {
   showCount?: boolean;
 }
 
+interface InputFieldProps {
+  lang: 'ko' | 'en';
+  value: BilingualValue;
+  handleInputChange: (lang: 'ko' | 'en', inputValue: string) => void;
+  placeholder: string;
+  disabled: boolean;
+  multiline: boolean;
+  rows: number;
+  maxLength?: number;
+  isPrimary: boolean;
+  getCharCount: (lang: 'ko' | 'en') => React.ReactNode;
+}
+
+const InputField: React.FC<InputFieldProps> = ({
+  lang,
+  value,
+  handleInputChange,
+  placeholder,
+  disabled,
+  multiline,
+  rows,
+  maxLength,
+  isPrimary,
+  getCharCount
+}) => {
+  const langLabel = lang === 'ko' ? '한국어' : 'English';
+  const flag = lang === 'ko' ? '🇰🇷' : '🇺🇸';
+
+  if (multiline) {
+    return (
+      <div className="space-y-2">
+        <div className="flex items-center justify-between">
+          <label className="flex items-center gap-2 text-sm font-medium text-gray-700 dark:text-gray-300">
+            <span>{flag}</span>
+            <span>{langLabel}</span>
+            {isPrimary && (
+              <span className="px-2 py-0.5 bg-brand-primary-light text-brand-primary text-xs rounded-full font-medium">
+                Primary
+              </span>
+            )}
+          </label>
+          {getCharCount(lang)}
+        </div>
+        <textarea
+          value={value[lang]}
+          onChange={(e) => handleInputChange(lang, e.target.value)}
+          placeholder={placeholder}
+          disabled={disabled}
+          rows={rows}
+          maxLength={maxLength}
+          className={`w-full px-4 py-3 bg-white dark:bg-gray-900 border-2 rounded-xl resize-none transition-colors
+            ${isPrimary 
+              ? 'border-brand-primary dark:border-brand-primary focus:border-brand-primary focus:ring-2 focus:ring-brand-primary-light' 
+              : 'border-gray-200 dark:border-gray-700 focus:border-gray-300 dark:focus:border-gray-600 focus:ring-2 focus:ring-gray-200 dark:focus:ring-gray-700'
+            }
+            disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500`}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div className="relative">
+      <div className="absolute left-4 top-1/2 -translate-y-1/2 flex items-center gap-2 text-gray-500 dark:text-gray-400">
+        <span className="text-lg">{flag}</span>
+      </div>
+      <input
+        type="text"
+        value={value[lang]}
+        onChange={(e) => handleInputChange(lang, e.target.value)}
+        placeholder={placeholder}
+        disabled={disabled}
+        maxLength={maxLength}
+        className={`w-full pl-12 pr-12 py-3 bg-white dark:bg-gray-900 border-2 rounded-xl transition-colors
+          ${isPrimary 
+            ? 'border-brand-primary dark:border-brand-primary focus:border-brand-primary focus:ring-2 focus:ring-brand-primary-light' 
+            : 'border-gray-200 dark:border-gray-700 focus:border-gray-300 dark:focus:border-gray-600 focus:ring-2 focus:ring-gray-200 dark:focus:ring-gray-700'
+          }
+          disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500`}
+      />
+      <div className="absolute right-4 top-1/2 -translate-y-1/2">
+        {getCharCount(lang)}
+      </div>
+    </div>
+  );
+};
+
 const BilingualInput: React.FC<BilingualInputProps> = ({
   label,
   value,
@@ -65,67 +152,20 @@ const BilingualInput: React.FC<BilingualInputProps> = ({
     );
   };
 
-  const InputField = ({ lang }: { lang: 'ko' | 'en' }) => {
-    const isPrimary = lang === language;
-    const langLabel = lang === 'ko' ? '한국어' : 'English';
-    const flag = lang === 'ko' ? '🇰🇷' : '🇺🇸';
-
-    if (multiline) {
-      return (
-        <div className="space-y-2">
-          <div className="flex items-center justify-between">
-            <label className="flex items-center gap-2 text-sm font-medium text-gray-700 dark:text-gray-300">
-              <span>{flag}</span>
-              <span>{langLabel}</span>
-              {isPrimary && (
-                <span className="px-2 py-0.5 bg-brand-primary-light text-brand-primary text-xs rounded-full font-medium">
-                  Primary
-                </span>
-              )}
-            </label>
-            {getCharCount(lang)}
-          </div>
-          <textarea
-            value={value[lang]}
-            onChange={(e) => handleInputChange(lang, e.target.value)}
-            placeholder={placeholder[lang]}
-            disabled={disabled}
-            rows={rows}
-            maxLength={maxLength}
-            className={`w-full px-4 py-3 bg-white dark:bg-gray-900 border-2 rounded-xl resize-none transition-colors
-              ${isPrimary 
-                ? 'border-brand-primary dark:border-brand-primary focus:border-brand-primary focus:ring-2 focus:ring-brand-primary-light' 
-                : 'border-gray-200 dark:border-gray-700 focus:border-gray-300 dark:focus:border-gray-600 focus:ring-2 focus:ring-gray-200 dark:focus:ring-gray-700'
-              }
-              disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500`}
-          />
-        </div>
-      );
-    }
-
+  const renderInputField = (lang: 'ko' | 'en') => {
     return (
-      <div className="relative">
-        <div className="absolute left-4 top-1/2 -translate-y-1/2 flex items-center gap-2 text-gray-500 dark:text-gray-400">
-          <span className="text-lg">{flag}</span>
-        </div>
-        <input
-          type="text"
-          value={value[lang]}
-          onChange={(e) => handleInputChange(lang, e.target.value)}
-          placeholder={placeholder[lang]}
-          disabled={disabled}
-          maxLength={maxLength}
-          className={`w-full pl-12 pr-12 py-3 bg-white dark:bg-gray-900 border-2 rounded-xl transition-colors
-            ${isPrimary 
-              ? 'border-brand-primary dark:border-brand-primary focus:border-brand-primary focus:ring-2 focus:ring-brand-primary-light' 
-              : 'border-gray-200 dark:border-gray-700 focus:border-gray-300 dark:focus:border-gray-600 focus:ring-2 focus:ring-gray-200 dark:focus:ring-gray-700'
-            }
-            disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500`}
-        />
-        <div className="absolute right-4 top-1/2 -translate-y-1/2">
-          {getCharCount(lang)}
-        </div>
-      </div>
+      <InputField
+        lang={lang}
+        value={value}
+        handleInputChange={handleInputChange}
+        placeholder={placeholder[lang]}
+        disabled={disabled}
+        multiline={multiline}
+        rows={rows}
+        maxLength={maxLength}
+        isPrimary={lang === language}
+        getCharCount={getCharCount}
+      />
     );
   };
 
@@ -153,14 +193,12 @@ const BilingualInput: React.FC<BilingualInputProps> = ({
 
       {/* 입력 필드들 */}
       <div className={`space-y-3 ${expandedLang === 'both' ? '' : 'hidden'}`}>
-        <InputField lang="ko" />
-        <InputField lang="en" />
+        {renderInputField('ko')}
+        {renderInputField('en')}
       </div>
 
       {/* 축소된 상태 - 현재 언어만 표시 */}
-      {expandedLang !== 'both' && (
-        <InputField lang={expandedLang} />
-      )}
+      {expandedLang !== 'both' && renderInputField(expandedLang)}
 
       {/* 미리보기 (두 언어 모두 입력된 경우) */}
       {value.ko && value.en && (

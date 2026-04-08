@@ -17,15 +17,20 @@ type BlockContent = HeadingContent | TextContent | ImageContent | VideoContent |
 
 interface PropertyPanelProps {
   block: ContentType;
-  onUpdate: (updates: { content: BlockContent }) => void;
+  onUpdate: (updates: Partial<ContentType>) => void;
   onClose: () => void;
 }
 
 const PropertyPanel: React.FC<PropertyPanelProps> = ({ block, onUpdate, onClose }) => {
   const [localContent, setLocalContent] = useState<BlockContent>(block.content);
+  const [localRole, setLocalRole] = useState<string>((block as any).role ?? 'none');
+  const [localStyle, setLocalStyle] = useState<any>((block as any).style ?? {});
 
   const handleSave = () => {
-    onUpdate({ content: localContent });
+    const updates: any = { content: localContent };
+    if (localRole && localRole !== 'none') updates.role = localRole;
+    if (Object.keys(localStyle).length > 0) updates.style = localStyle;
+    onUpdate(updates);
     onClose();
   };
 
@@ -94,6 +99,88 @@ const PropertyPanel: React.FC<PropertyPanelProps> = ({ block, onUpdate, onClose 
           <option value="ad">광고 (Ad)</option>
         </select>
       </div>
+
+      {/* 역할 선택 */}
+      <div className="mb-6">
+        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+          역할 (Semantic Role)
+        </label>
+        <select
+          value={localRole}
+          onChange={(e) => setLocalRole(e.target.value)}
+          className="w-full px-3 py-2 bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 rounded-lg text-gray-900 dark:text-gray-100"
+        >
+          <option value="none">None</option>
+          <option value="title">Title</option>
+          <option value="author">Author</option>
+          <option value="affiliation">Affiliation</option>
+          <option value="abstract-body">Abstract Body</option>
+          <option value="poster-image">Poster Image</option>
+        </select>
+      </div>
+
+      {/* 스타일 편집 */}
+      <div className="mb-6">
+        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+          잠금 (Lock)
+        </label>
+        <div className="flex items-center">
+          <input
+            type="checkbox"
+            checked={localStyle.locked ?? false}
+            onChange={(e) => setLocalStyle({ ...localStyle, locked: e.target.checked })}
+            className="mr-2"
+          />
+          <span className="text-sm text-gray-700 dark:text-gray-300">잠금 활성화</span>
+        </div>
+      </div>
+
+      {/* 스타일 세부 옵션 (잠금이 아닐 경우) */}
+      {!localStyle.locked && (
+        <div className="space-y-4 mb-6">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+              글꼴 크기 (Font Size)
+            </label>
+            <input
+              type="text"
+              placeholder="e.g., 16px"
+              value={localStyle.fontSize ?? ''}
+              onChange={(e) => setLocalStyle({ ...localStyle, fontSize: e.target.value })}
+              className="w-full px-3 py-2 bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 rounded-lg text-gray-900 dark:text-gray-100"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+              글꼴 굵기 (Font Weight)
+            </label>
+            <select
+              value={localStyle.fontWeight ?? 'normal'}
+              onChange={(e) => setLocalStyle({ ...localStyle, fontWeight: e.target.value })}
+              className="w-full px-3 py-2 bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 rounded-lg text-gray-900 dark:text-gray-100"
+            >
+              <option value="normal">Normal</option>
+              <option value="bold">Bold</option>
+              <option value="bolder">Bolder</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+              정렬 (Text Align)
+            </label>
+            <select
+              value={localStyle.textAlign ?? 'left'}
+              onChange={(e) => setLocalStyle({ ...localStyle, textAlign: e.target.value })}
+              className="w-full px-3 py-2 bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 rounded-lg text-gray-900 dark:text-gray-100"
+            >
+              <option value="left">Left</option>
+              <option value="center">Center</option>
+              <option value="right">Right</option>
+              <option value="justify">Justify</option>
+            </select>
+          </div>
+        </div>
+      )}
 
       {/* 타입별 속성 편집 */}
       {block.type === 'heading' && (

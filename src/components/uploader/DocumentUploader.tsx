@@ -10,6 +10,7 @@ import { useDocumentParsingState } from '@/hooks/useDocumentParsingState';
 
 interface DocumentUploaderProps {
   conferenceId: string;
+  publicationId?: string;
   publicationType: 'abstract' | 'poster' | 'presentation';
   userId: string;
   onComplete?: (articleId: string) => void;
@@ -17,12 +18,14 @@ interface DocumentUploaderProps {
 
 const DocumentUploader: React.FC<DocumentUploaderProps> = ({
   conferenceId,
+  publicationId,
   publicationType,
   userId,
   onComplete
 }) => {
   const metadata = {
     conferenceId,
+    publicationId,
     publicationType,
     userId
   };

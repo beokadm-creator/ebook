@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { collection, getDocs } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { ConferenceManagement } from './ConferenceManagement';
+import PublicationManagement from './PublicationManagement';
 import AdManagement from './AdManagement';
 import UserManagement from './UserManagement';
 import { 
@@ -187,21 +188,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout }) => {
         );
 
       case 'publications':
-        return (
-          <div className="bg-white dark:bg-gray-800 rounded-2xl border-2 border-gray-200 dark:border-gray-700 p-6">
-            <div className="flex items-center justify-between mb-6">
-              <h2 className="text-xl font-bold text-gray-900 dark:text-gray-100">
-                간행물 관리
-              </h2>
-              <button className="px-6 py-3 bg-brand-primary hover:bg-brand-primary-hover text-white rounded-xl font-medium transition-colors">
-                새 간행물
-              </button>
-            </div>
-            <p className="text-gray-600 dark:text-gray-400 text-center py-12">
-              간행물 리스트가 여기에 표시됩니다.
-            </p>
-          </div>
-        );
+        return <PublicationManagement />;
 
       case 'ads':
         return (

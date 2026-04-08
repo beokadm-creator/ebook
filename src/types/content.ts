@@ -45,11 +45,26 @@ export interface FootnoteContent {
   referenceId: string;
 }
 
+export type SemanticRole = 'title' | 'author' | 'affiliation' | 'abstract-body' | 'poster-image' | 'none';
+
+export interface BlockStyle {
+  locked?: boolean;
+  fontSize?: string;
+  fontWeight?: 'normal' | 'bold' | 'bolder';
+  textAlign?: 'left' | 'center' | 'right' | 'justify';
+  color?: string;
+  backgroundColor?: string;
+  padding?: string;
+  margin?: string;
+}
+
 // Individual block types for discriminated union
 export interface HeadingBlock {
   id: string;
   type: 'heading';
   content: HeadingContent;
+  role?: SemanticRole;
+  style?: BlockStyle;
   order: number;
   createdAt?: Date;
 }
@@ -58,6 +73,8 @@ export interface TextBlock {
   id: string;
   type: 'text';
   content: TextContent;
+  role?: SemanticRole;
+  style?: BlockStyle;
   order: number;
   createdAt?: Date;
 }
@@ -66,6 +83,8 @@ export interface ImageBlock {
   id: string;
   type: 'image';
   content: ImageContent;
+  role?: SemanticRole;
+  style?: BlockStyle;
   order: number;
   createdAt?: Date;
 }
@@ -74,6 +93,8 @@ export interface VideoBlock {
   id: string;
   type: 'video';
   content: VideoContent;
+  role?: SemanticRole;
+  style?: BlockStyle;
   order: number;
   createdAt?: Date;
 }
@@ -82,6 +103,8 @@ export interface AdBlock {
   id: string;
   type: 'ad';
   content: AdContent;
+  role?: SemanticRole;
+  style?: BlockStyle;
   order: number;
   createdAt?: Date;
 }
@@ -90,6 +113,8 @@ export interface ListBlock {
   id: string;
   type: 'list';
   content: ListContent;
+  role?: SemanticRole;
+  style?: BlockStyle;
   order: number;
   createdAt?: Date;
 }
@@ -98,6 +123,8 @@ export interface FootnoteBlock {
   id: string;
   type: 'footnote';
   content: FootnoteContent;
+  role?: SemanticRole;
+  style?: BlockStyle;
   order: number;
   createdAt?: Date;
 }
