@@ -1,0 +1,55 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+             exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    // Conferences - public read, admin write
+    match /conferences/{conferenceId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Publications and subcollections - public read, admin write
+    match /publications/{publicationId} {
+      allow read: if true;
+      allow write: if isAdmin();
+
+      match /articles/{articleId} {
+        allow read: if true;
+        allow write: if isAdmin();
+
+        match /contentBlocks/{blockId} {
+          allow read: if true;
+          allow write: if isAdmin();
+        }
+
+        match /footnotes/{footnoteId} {
+          allow read: if true;
+          allow write: if isAdmin();
+        }
+      }
+    }
+
+    // Users - own document can be created on first login, admin can write all
+    match /users/{userId} {
+      allow read: if isAuthenticated() && (request.auth.uid == userId || isAdmin());
+      allow create: if isAuthenticated() && request.auth.uid == userId;
+      allow update, delete: if isAdmin();
+    }
+
+    // Analytics - admin only
+    match /analytics/{analyticsId} {
+      allow read: if isAdmin();
+      allow write: if isAdmin();
+    }
+  }
+}

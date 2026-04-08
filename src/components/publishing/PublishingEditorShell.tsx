@@ -1,0 +1,2669 @@
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  ArrowDownTrayIcon,
+  ArrowPathIcon,
+  LockClosedIcon,
+  LockOpenIcon,
+  PhotoIcon,
+  PlusIcon,
+  TrashIcon,
+} from '@heroicons/react/24/outline';
+import { uploadPublicationImage } from '@/lib/publishing/assets';
+import { formatMm, getPxPerMm, mmToPx, pxToMm } from '@/lib/publishing/a4';
+import { getThreadPlainText } from '@/lib/publishing/defaultDocument';
+import { paginateThreadWithDom } from '@/lib/publishing/domPagination';
+import { downloadPagesAsPdf } from '@/lib/publishing/pdf';
+import { getRecommendedPreset } from '@/lib/publishing/recommendations';
+import { TEMPLATE_PRESET_DESCRIPTIONS, TEMPLATE_PRESET_LABELS, TemplatePresetKey } from '@/lib/publishing/templatePresets';
+import RichTextThreadEditor from '@/components/publishing/RichTextThreadEditor';
+import { renderRunsToReact } from '@/lib/publishing/richText';
+import { showToast } from '@/components/common/Toast';
+import { usePublishingStore } from '@/stores/publishingStore';
+import { ElementScope, MasterTemplate, PageBlock, PublicationPage, TextRole } from '@/types/publishing';
+import { logError } from '@/utils/errorHandler';
+
+interface PublishingEditorShellProps {
+  publicationId: string;
+}
+
+interface TemplateSelection {
+  type: 'decoration' | 'zone' | null;
+  id: string | null;
+}
+
+type RenderMode = 'interactive' | 'export';
+
+interface ValidationReport {
+  pageSizeDeltaPx: {
+    width: number;
+    height: number;
+  };
+  markerDeltaPx: Record<string, { x: number; y: number }>;
+}
+
+interface ActiveSnapGuides {
+  vertical: number[];
+  horizontal: number[];
+}
+
+interface PreflightIssue {
+  id: string;
+  severity: 'warning' | 'error';
+  message: string;
+  pageId?: string;
+  blockId?: string;
+}
+
+const roleLabel: Record<TextRole, string> = {
+  title: '표지 제목',
+  subtitle: '부제',
+  heading: '섹션 제목',
+  subheading: '서브 섹션',
+  paragraph: '본문',
+  caption: '캡션',
+  quote: '인용문',
+};
+
+const roleOptions: Array<{ value: TextRole; label: string }> = [
+  { value: 'title', label: '표지 제목' },
+  { value: 'heading', label: '섹션 제목' },
+  { value: 'subheading', label: '서브 섹션' },
+  { value: 'paragraph', label: '본문' },
+  { value: 'quote', label: '인용문' },
+  { value: 'caption', label: '캡션' },
+];
+
+const TextBlockView: React.FC<{
+  block: Extract<PageBlock, { type: 'text' }>;
+  zoneStyle: MasterTemplate['contentZones'][number]['style'];
+}> = ({ block, zoneStyle }) => (
+  <div
+    style={{
+      fontFamily: zoneStyle.fontFamily,
+      fontSize: block.styleOverride?.fontSize ?? zoneStyle.fontSize,
+      fontWeight: block.styleOverride?.fontWeight ?? zoneStyle.fontWeight,
+      lineHeight: block.styleOverride?.lineHeight ?? zoneStyle.lineHeight,
+      letterSpacing: block.styleOverride?.letterSpacing ?? zoneStyle.letterSpacing,
+      color: block.styleOverride?.color ?? zoneStyle.color,
+      textAlign: block.styleOverride?.textAlign ?? zoneStyle.textAlign,
+      whiteSpace: 'pre-wrap',
+      wordBreak: 'break-word',
+    }}
+  >
+    {renderRunsToReact(block.content.runs)}
+  </div>
+);
+
+const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
+
+const getMaxValidationDeltaPx = (report: ValidationReport | null) => {
+  if (!report) {
+    return 0;
+  }
+
+  const markerDeltas = Object.values(report.markerDeltaPx).flatMap((delta) => [Math.abs(delta.x), Math.abs(delta.y)]);
+  return Math.max(
+    Math.abs(report.pageSizeDeltaPx.width),
+    Math.abs(report.pageSizeDeltaPx.height),
+    ...markerDeltas,
+    0,
+  );
+};
+
+const getDecorationCategoryLabel = (decoration: MasterTemplate['decorations'][number]) => {
+  if (decoration.textBinding === 'page.number') {
+    return '페이지 번호';
+  }
+  if (decoration.textBinding === 'section.number') {
+    return '섹션 번호';
+  }
+  if (decoration.textBinding === 'document.title') {
+    return '헤더';
+  }
+  if (decoration.type === 'image') {
+    return '로고/이미지';
+  }
+  if (decoration.y >= 1000) {
+    return '푸터';
+  }
+  if (decoration.y <= 120) {
+    return '헤더';
+  }
+  return decoration.type === 'shape' ? '라인/도형' : '기타 텍스트';
+};
+
+const SNAP_THRESHOLD_PX = 8;
+
+const bindPointerDrag = (
+  event: React.PointerEvent<HTMLElement>,
+  onMove: (deltaX: number, deltaY: number) => void,
+  onEnd?: () => void,
+) => {
+  event.preventDefault();
+  event.stopPropagation();
+  const startX = event.clientX;
+  const startY = event.clientY;
+
+  const handleMove = (pointerEvent: PointerEvent) => {
+    onMove(pointerEvent.clientX - startX, pointerEvent.clientY - startY);
+  };
+
+  const stopMove = () => {
+    window.removeEventListener('pointermove', handleMove);
+    window.removeEventListener('pointerup', stopMove);
+    onEnd?.();
+  };
+
+  window.addEventListener('pointermove', handleMove);
+  window.addEventListener('pointerup', stopMove);
+};
+
+const ImageBlockView: React.FC<{
+  block: Extract<PageBlock, { type: 'image' }>;
+  selected: boolean;
+  onSelect: () => void;
+  onMove: (deltaX: number, deltaY: number) => void;
+  onResize: (deltaX: number, deltaY: number) => void;
+}> = ({ block, selected, onSelect, onMove, onResize }) => {
+  const startDrag = (event: React.PointerEvent<HTMLDivElement>, mode: 'move' | 'resize') => {
+    if (block.locked) {
+      onSelect();
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    onSelect();
+
+    const startX = event.clientX;
+    const startY = event.clientY;
+
+    const handleMove = (pointerEvent: PointerEvent) => {
+      const deltaX = pointerEvent.clientX - startX;
+      const deltaY = pointerEvent.clientY - startY;
+      if (mode === 'move') {
+        onMove(deltaX, deltaY);
+      } else {
+        onResize(deltaX, deltaY);
+      }
+    };
+
+    const stopMove = () => {
+      window.removeEventListener('pointermove', handleMove);
+      window.removeEventListener('pointerup', stopMove);
+    };
+
+    window.addEventListener('pointermove', handleMove);
+    window.addEventListener('pointerup', stopMove);
+  };
+
+  return (
+    <div
+      className={`absolute overflow-hidden rounded-md border bg-gray-50 shadow-sm ${
+        selected ? 'editor-selection-ring border-amber-400' : 'border-gray-200'
+      }`}
+      style={{
+        left: block.placement.x,
+        top: block.placement.y,
+        width: block.placement.width,
+        height: block.placement.height,
+        zIndex: block.placement.zIndex,
+        transform: `rotate(${block.placement.rotation}deg)`,
+      }}
+      onPointerDown={(event) => startDrag(event, 'move')}
+    >
+      <img
+        src={block.assetRef.src}
+        alt={block.alt?.ko || ''}
+        className="absolute max-w-none"
+        draggable={false}
+        style={{
+          width: `${100 / block.crop.width}%`,
+          height: `${100 / block.crop.height}%`,
+          left: `${-block.crop.originX * (100 / block.crop.width)}%`,
+          top: `${-block.crop.originY * (100 / block.crop.height)}%`,
+        }}
+      />
+      {block.caption ? (
+        <figcaption className="absolute bottom-0 left-0 right-0 bg-white/90 px-2 py-1 text-xs text-gray-700">
+          {block.caption.ko}
+        </figcaption>
+      ) : null}
+      {selected && !block.locked ? (
+        <div
+          data-html2canvas-ignore="true"
+          className="editor-handle absolute bottom-[-10px] right-[-10px] h-5 w-5 rounded-full border-2 border-white bg-slate-900 shadow"
+          onPointerDown={(event) => startDrag(event, 'resize')}
+        />
+      ) : null}
+    </div>
+  );
+};
+
+const PublishingPagePreview: React.FC<{
+  page: PublicationPage;
+  pageIndex: number;
+  pageRef: (node: HTMLDivElement | null) => void;
+  templateSelection: TemplateSelection;
+  setTemplateSelection: React.Dispatch<React.SetStateAction<TemplateSelection>>;
+  mode: RenderMode;
+  globalFixedManagerMode: boolean;
+}> = ({ page, pageIndex, pageRef, templateSelection, setTemplateSelection, mode, globalFixedManagerMode }) => {
+  const {
+    document,
+    selectBlock,
+    selection,
+    updateImageBlock,
+    updateMasterDecoration,
+    updateGlobalMasterDecoration,
+    updateMasterZoneFrame,
+  } = usePublishingStore();
+  const master = document.masters.items.find((item) => item.id === page.masterId);
+  const pageSize = document.layout.pagePreset;
+  const pageNumbering = document.layout.pageNumbering;
+  const printGuides = document.layout.printGuides;
+  const [activeSnapGuides, setActiveSnapGuides] = useState<ActiveSnapGuides>({ vertical: [], horizontal: [] });
+
+  if (!master) {
+    return null;
+  }
+
+  const displayPageNumber = (() => {
+    if (!pageNumbering.enabled) {
+      return '';
+    }
+
+    if (page.pageRole === 'cover' && !pageNumbering.showOnCover) {
+      return '';
+    }
+
+    const printablePages = document.pages.filter((item) => pageNumbering.showOnCover || item.pageRole !== 'cover');
+    const displayIndex = printablePages.findIndex((item) => item.id === page.id);
+    if (displayIndex < 0) {
+      return '';
+    }
+
+    return String(pageNumbering.startAt + displayIndex);
+  })();
+
+  const displaySectionNumber = (() => {
+    const topLevelTocItems = document.toc.items.filter((item) => item.level === 1);
+    if (!topLevelTocItems.length) {
+      return '';
+    }
+
+    const currentTocItem =
+      topLevelTocItems.find((item) => item.source.pageId === page.id)
+      ?? [...topLevelTocItems]
+        .reverse()
+        .find((item) => {
+          const targetPage = document.pages.find((candidate) => candidate.id === item.source.pageId);
+          return targetPage ? targetPage.pageNumber <= page.pageNumber : false;
+        });
+
+    if (!currentTocItem) {
+      return '';
+    }
+
+    const index = topLevelTocItems.findIndex((item) => item.id === currentTocItem.id);
+    return String(index + 1).padStart(2, '0');
+  })();
+
+  const isEvenDisplayPage = Number(displayPageNumber) % 2 === 0;
+  const getPageNumberLayout = (decoration: MasterTemplate['decorations'][number]) => {
+    const safeAreaWidth = pageSize.widthPx - pageSize.safeMarginPx.left - pageSize.safeMarginPx.right;
+    const shouldMirror = (pageNumbering.mirrorOnEvenPages ?? false) && isEvenDisplayPage;
+    const resolvedAlignment =
+      shouldMirror && (pageNumbering.alignmentPreset ?? 'center') !== 'center'
+        ? (pageNumbering.alignmentPreset ?? 'center') === 'left'
+          ? 'right'
+          : 'left'
+        : (pageNumbering.alignmentPreset ?? 'center');
+
+    const left =
+      resolvedAlignment === 'left'
+        ? pageSize.safeMarginPx.left
+        : resolvedAlignment === 'right'
+          ? pageSize.widthPx - pageSize.safeMarginPx.right - decoration.width
+          : pageSize.safeMarginPx.left + (safeAreaWidth - decoration.width) / 2;
+
+    return {
+      left,
+      textAlign: resolvedAlignment === 'center' ? 'center' : resolvedAlignment,
+    } as const;
+  };
+
+  const updateDecorationPosition = (decorationId: string, updates: { x?: number; y?: number; width?: number; height?: number }) => {
+    if (master.decorations.find((item) => item.id === decorationId)?.scope === 'global-fixed') {
+      updateGlobalMasterDecoration(master.id, decorationId, updates);
+      return;
+    }
+    updateMasterDecoration(master.id, decorationId, updates);
+  };
+
+  const canEditDecoration = (scope: ElementScope, locked: boolean) =>
+    mode === 'interactive' && !locked && (scope !== 'global-fixed' ? !master.locked : globalFixedManagerMode);
+
+  const snapHorizontal = (x: number, width: number) => {
+    const candidates = [
+      pageSize.safeMarginPx.left,
+      pageSize.widthPx - pageSize.safeMarginPx.right - width,
+      pageSize.widthPx / 2 - width / 2,
+    ];
+
+    return candidates.reduce((best, candidate) => (
+      Math.abs(candidate - x) < Math.abs(best - x) ? candidate : best
+    ), x);
+  };
+
+  const snapVertical = (y: number, height: number) => {
+    const candidates = [
+      pageSize.safeMarginPx.top,
+      pageSize.heightPx - pageSize.safeMarginPx.bottom - height,
+    ];
+
+    const nearest = candidates.reduce((best, candidate) => (
+      Math.abs(candidate - y) < Math.abs(best - y) ? candidate : best
+    ), y);
+
+    return Math.abs(nearest - y) <= SNAP_THRESHOLD_PX ? nearest : y;
+  };
+
+  const snapDecorationPosition = (x: number, y: number, width: number, height: number) => {
+    const snappedX = snapHorizontal(x, width);
+    const snappedY = snapVertical(y, height);
+    const vertical: number[] = [];
+    const horizontal: number[] = [];
+    if (Math.abs(snappedX - x) <= SNAP_THRESHOLD_PX) {
+      vertical.push(snappedX + width / 2);
+    }
+    if (Math.abs(snappedY - y) <= SNAP_THRESHOLD_PX) {
+      horizontal.push(snappedY);
+    }
+    setActiveSnapGuides({ vertical, horizontal });
+    return {
+      x: Math.abs(snappedX - x) <= SNAP_THRESHOLD_PX ? snappedX : x,
+      y: snappedY,
+    };
+  };
+
+  const snapZoneFrame = (x: number, y: number, width: number, height: number) => {
+    const horizontalCandidates = [
+      pageSize.safeMarginPx.left,
+      pageSize.widthPx - pageSize.safeMarginPx.right - width,
+      pageSize.widthPx / 2 - width / 2,
+    ];
+    const verticalCandidates = [
+      pageSize.safeMarginPx.top,
+      pageSize.heightPx - pageSize.safeMarginPx.bottom - height,
+    ];
+
+    const nearestX = horizontalCandidates.reduce((best, candidate) => (
+      Math.abs(candidate - x) < Math.abs(best - x) ? candidate : best
+    ), x);
+    const nearestY = verticalCandidates.reduce((best, candidate) => (
+      Math.abs(candidate - y) < Math.abs(best - y) ? candidate : best
+    ), y);
+
+    const vertical: number[] = [];
+    const horizontal: number[] = [];
+    if (Math.abs(nearestX - x) <= SNAP_THRESHOLD_PX) {
+      vertical.push(nearestX, nearestX + width);
+    }
+    if (Math.abs(nearestY - y) <= SNAP_THRESHOLD_PX) {
+      horizontal.push(nearestY, nearestY + height);
+    }
+    setActiveSnapGuides({ vertical, horizontal });
+
+    return {
+      x: Math.abs(nearestX - x) <= SNAP_THRESHOLD_PX ? nearestX : x,
+      y: Math.abs(nearestY - y) <= SNAP_THRESHOLD_PX ? nearestY : y,
+    };
+  };
+
+  return (
+    <div className="flex flex-col items-center gap-3">
+      <div className="text-xs font-semibold uppercase tracking-[0.2em] text-gray-400">
+        Page {pageIndex + 1}
+      </div>
+      <div
+        ref={pageRef}
+        className={`pdf-page relative overflow-hidden bg-white ${mode === 'interactive' ? 'rounded-[24px] border border-gray-300 shadow-[0_30px_90px_rgba(15,23,42,0.12)]' : ''}`}
+        style={{ width: pageSize.widthPx, height: pageSize.heightPx }}
+      >
+        <div className="absolute inset-0" style={{ background: master.background.fill }} />
+        {printGuides.showValidationMarks ? (
+          <>
+            <div data-validation-marker="top-left" className="absolute left-0 top-0 h-3 w-3 border-r border-b border-black" />
+            <div data-validation-marker="top-center" className="absolute left-1/2 top-0 h-3 w-px -translate-x-1/2 bg-black" />
+            <div data-validation-marker="top-right" className="absolute right-0 top-0 h-3 w-3 border-l border-b border-black" />
+            <div data-validation-marker="bottom-left" className="absolute bottom-0 left-0 h-3 w-3 border-r border-t border-black" />
+            <div data-validation-marker="bottom-center" className="absolute bottom-0 left-1/2 h-3 w-px -translate-x-1/2 bg-black" />
+            <div data-validation-marker="bottom-right" className="absolute bottom-0 right-0 h-3 w-3 border-l border-t border-black" />
+          </>
+        ) : null}
+        {mode === 'interactive' && printGuides.showSafeArea ? (
+          <div
+            data-html2canvas-ignore="true"
+            className="pointer-events-none absolute border border-emerald-400/70"
+            style={{
+              left: pageSize.safeMarginPx.left,
+              top: pageSize.safeMarginPx.top,
+              width: pageSize.widthPx - pageSize.safeMarginPx.left - pageSize.safeMarginPx.right,
+              height: pageSize.heightPx - pageSize.safeMarginPx.top - pageSize.safeMarginPx.bottom,
+            }}
+          />
+        ) : null}
+        {mode === 'interactive' && printGuides.showCenterLine ? (
+          <div
+            data-html2canvas-ignore="true"
+            className="pointer-events-none absolute top-0 w-px bg-rose-400/70"
+            style={{ left: pageSize.widthPx / 2, height: pageSize.heightPx }}
+          />
+        ) : null}
+        {mode === 'interactive'
+          ? activeSnapGuides.vertical.map((guide, index) => (
+              <div
+                key={`snap-v-${index}-${guide}`}
+                data-html2canvas-ignore="true"
+                className="pointer-events-none absolute top-0 w-px bg-sky-500/80"
+                style={{ left: guide, height: pageSize.heightPx }}
+              />
+            ))
+          : null}
+        {mode === 'interactive'
+          ? activeSnapGuides.horizontal.map((guide, index) => (
+              <div
+                key={`snap-h-${index}-${guide}`}
+                data-html2canvas-ignore="true"
+                className="pointer-events-none absolute left-0 h-px bg-sky-500/80"
+                style={{ top: guide, width: pageSize.widthPx }}
+              />
+            ))
+          : null}
+        {master.decorations.map((decoration) => (
+          decoration.type === 'image' ? (
+            <div
+              key={decoration.id}
+              className={`absolute ${mode === 'interactive' && templateSelection.type === 'decoration' && templateSelection.id === decoration.id ? 'editor-selection-ring ring-2 ring-sky-400 ring-offset-2' : ''} ${decoration.scope === 'global-fixed' ? (globalFixedManagerMode ? 'cursor-move' : 'cursor-default') : 'cursor-move'}`}
+              style={{
+                left: decoration.x,
+                top: decoration.y,
+                width: decoration.width,
+                height: decoration.height,
+              }}
+              onPointerDown={(event) => {
+                if (!canEditDecoration(decoration.scope, decoration.locked)) {
+                  return;
+                }
+                setTemplateSelection({ type: 'decoration', id: decoration.id });
+                bindPointerDrag(
+                  event,
+                  (deltaX, deltaY) => {
+                    const nextX = clamp(decoration.x + deltaX, 0, pageSize.widthPx - 20);
+                    const nextY = clamp(decoration.y + deltaY, 0, pageSize.heightPx - 20);
+                    const snapped = snapDecorationPosition(nextX, nextY, decoration.width, decoration.height);
+                    updateDecorationPosition(decoration.id, snapped);
+                  },
+                  () => setActiveSnapGuides({ vertical: [], horizontal: [] }),
+                );
+              }}
+            >
+              <img
+                src={document.assets.find((asset) => asset.id === decoration.assetId)?.src}
+                alt=""
+                className="h-full w-full object-contain"
+              />
+              {canEditDecoration(decoration.scope, decoration.locked) && templateSelection.type === 'decoration' && templateSelection.id === decoration.id ? (
+                <div
+                  data-html2canvas-ignore="true"
+                  className="editor-handle absolute bottom-[-10px] right-[-10px] h-5 w-5 rounded-full border-2 border-white bg-slate-900 shadow"
+                  onPointerDown={(event) => {
+                    setTemplateSelection({ type: 'decoration', id: decoration.id });
+                    bindPointerDrag(event, (deltaX, deltaY) =>
+                      updateDecorationPosition(decoration.id, {
+                        width: clamp(decoration.width + deltaX, 20, pageSize.widthPx - decoration.x),
+                        height: clamp(decoration.height + deltaY, 20, pageSize.heightPx - decoration.y),
+                      }),
+                    );
+                  }}
+                />
+              ) : null}
+            </div>
+          ) : (
+            (() => {
+              const pageNumberLayout = decoration.textBinding === 'page.number' ? getPageNumberLayout(decoration) : null;
+              return (
+            <div
+              key={decoration.id}
+              className={`absolute ${mode === 'interactive' && templateSelection.type === 'decoration' && templateSelection.id === decoration.id ? 'editor-selection-ring ring-2 ring-sky-400 ring-offset-2' : ''} ${decoration.scope === 'global-fixed' ? (globalFixedManagerMode ? 'cursor-move' : 'cursor-default') : 'cursor-move'}`}
+              style={{
+                left: pageNumberLayout?.left ?? decoration.x,
+                top: decoration.y,
+                width: decoration.width,
+                height: decoration.height,
+                background: decoration.type === 'shape' ? decoration.fill : 'transparent',
+                color: decoration.style?.color ?? '#666666',
+                fontSize: decoration.style?.fontSize ?? 12,
+                fontWeight: decoration.style?.fontWeight ?? 400,
+                lineHeight: decoration.style?.lineHeight ?? 1.4,
+                letterSpacing: decoration.style?.letterSpacing ?? 0,
+                textAlign: pageNumberLayout?.textAlign ?? decoration.style?.textAlign ?? 'center',
+                fontFamily: decoration.style?.fontFamily ?? 'Noto Serif KR',
+              }}
+              onPointerDown={(event) => {
+                if (!canEditDecoration(decoration.scope, decoration.locked)) {
+                  return;
+                }
+                setTemplateSelection({ type: 'decoration', id: decoration.id });
+                bindPointerDrag(
+                  event,
+                  (deltaX, deltaY) => {
+                    const nextX = clamp(decoration.x + deltaX, 0, pageSize.widthPx - 20);
+                    const nextY = clamp(decoration.y + deltaY, 0, pageSize.heightPx - 20);
+                    const snapped = snapDecorationPosition(nextX, nextY, decoration.width, decoration.height);
+                    updateDecorationPosition(decoration.id, snapped);
+                  },
+                  () => setActiveSnapGuides({ vertical: [], horizontal: [] }),
+                );
+              }}
+            >
+              {decoration.textBinding === 'page.number'
+                ? displayPageNumber
+                : decoration.textBinding === 'document.title'
+                  ? document.meta.title.ko
+                  : decoration.textBinding === 'section.number'
+                    ? displaySectionNumber
+                    : decoration.text}
+              {canEditDecoration(decoration.scope, decoration.locked) && templateSelection.type === 'decoration' && templateSelection.id === decoration.id ? (
+                <div
+                  data-html2canvas-ignore="true"
+                  className="editor-handle absolute bottom-[-10px] right-[-10px] h-5 w-5 rounded-full border-2 border-white bg-slate-900 shadow"
+                  onPointerDown={(event) => {
+                    setTemplateSelection({ type: 'decoration', id: decoration.id });
+                    bindPointerDrag(event, (deltaX, deltaY) =>
+                      updateDecorationPosition(decoration.id, {
+                        width: clamp(decoration.width + deltaX, 20, pageSize.widthPx - decoration.x),
+                        height: clamp(decoration.height + deltaY, 20, pageSize.heightPx - decoration.y),
+                      }),
+                    );
+                  }}
+                />
+              ) : null}
+            </div>
+              );
+            })()
+          )
+        ))}
+
+        {page.zones.map((zoneInstance) => {
+          const zoneTemplate = master.contentZones.find((item) => item.id === zoneInstance.zoneId);
+          if (!zoneTemplate) {
+            return null;
+          }
+
+          return (
+            <div
+              key={zoneInstance.zoneId}
+              className={`absolute ${mode === 'interactive' && printGuides.showContentBounds ? 'editor-guide border border-dashed border-slate-200' : ''}`}
+              style={{
+                left: zoneTemplate.frame.x,
+                top: zoneTemplate.frame.y,
+                width: zoneTemplate.frame.width,
+                height: zoneTemplate.frame.height,
+                paddingTop: zoneTemplate.constraints.padding.top,
+                paddingRight: zoneTemplate.constraints.padding.right,
+                paddingBottom: zoneTemplate.constraints.padding.bottom,
+                paddingLeft: zoneTemplate.constraints.padding.left,
+              }}
+            >
+              {mode === 'interactive' ? <div
+                data-html2canvas-ignore="true"
+                className={`absolute left-2 top-2 z-20 rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.15em] text-white/85 ${templateSelection.type === 'zone' && templateSelection.id === zoneTemplate.id ? 'bg-sky-600' : 'bg-slate-900'}`}
+                onPointerDown={(event) => {
+                  if (master.locked || zoneTemplate.scope === 'global-fixed' || zoneTemplate.locked) {
+                    return;
+                  }
+                  setTemplateSelection({ type: 'zone', id: zoneTemplate.id });
+                  bindPointerDrag(
+                    event,
+                    (deltaX, deltaY) => {
+                      const nextX = clamp(zoneTemplate.frame.x + deltaX, 0, pageSize.widthPx - 40);
+                      const nextY = clamp(zoneTemplate.frame.y + deltaY, 0, pageSize.heightPx - 40);
+                      const snapped = snapZoneFrame(nextX, nextY, zoneTemplate.frame.width, zoneTemplate.frame.height);
+                      updateMasterZoneFrame(master.id, zoneTemplate.id, snapped);
+                    },
+                    () => setActiveSnapGuides({ vertical: [], horizontal: [] }),
+                  );
+                }}
+              >
+                {zoneTemplate.name}
+                {zoneTemplate.flowOrder ? ` · Flow ${zoneTemplate.flowOrder}` : ''}
+              </div> : null}
+              {mode === 'interactive' && !master.locked && zoneTemplate.scope !== 'global-fixed' && !zoneTemplate.locked ? <div
+                data-html2canvas-ignore="true"
+                className={`editor-handle absolute bottom-[-10px] right-[-10px] h-5 w-5 rounded-full border-2 border-white shadow ${templateSelection.type === 'zone' && templateSelection.id === zoneTemplate.id ? 'bg-sky-600' : 'bg-slate-900'}`}
+                onPointerDown={(event) => {
+                  setTemplateSelection({ type: 'zone', id: zoneTemplate.id });
+                  bindPointerDrag(event, (deltaX, deltaY) =>
+                    updateMasterZoneFrame(master.id, zoneTemplate.id, {
+                      width: clamp(zoneTemplate.frame.width + deltaX, 80, pageSize.widthPx - zoneTemplate.frame.x),
+                      height: clamp(zoneTemplate.frame.height + deltaY, 80, pageSize.heightPx - zoneTemplate.frame.y),
+                    }),
+                    );
+                }}
+              /> : null}
+              {zoneInstance.blocks.map((block) => {
+                const isSelected = selection.blockId === block.id;
+
+                if (block.type === 'image') {
+                  return (
+                    <ImageBlockView
+                      key={block.id}
+                      block={block}
+                      selected={isSelected}
+                      onSelect={() => selectBlock(page.id, zoneInstance.zoneId, block.id)}
+                      onMove={(deltaX, deltaY) =>
+                        updateImageBlock(page.id, zoneInstance.zoneId, block.id, {
+                          placement: {
+                            ...block.placement,
+                            x: clamp(block.placement.x + deltaX, 0, zoneTemplate.frame.width - 40),
+                            y: clamp(block.placement.y + deltaY, 0, zoneTemplate.frame.height - 40),
+                          },
+                        })
+                      }
+                      onResize={(deltaX, deltaY) =>
+                        updateImageBlock(page.id, zoneInstance.zoneId, block.id, {
+                          placement: {
+                            ...block.placement,
+                            width: clamp(block.placement.width + deltaX, 80, zoneTemplate.frame.width - block.placement.x),
+                            height: clamp(block.placement.height + deltaY, 80, zoneTemplate.frame.height - block.placement.y),
+                          },
+                        })
+                      }
+                    />
+                  );
+                }
+
+                return (
+                  <div
+                    key={block.id}
+                    onClick={() => selectBlock(page.id, zoneInstance.zoneId, block.id)}
+                    className={`cursor-text rounded-md transition ${isSelected ? 'editor-selection-ring ring-2 ring-amber-400 ring-offset-2' : ''}`}
+                  >
+                    <TextBlockView block={block} zoneStyle={zoneTemplate.style} />
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
+const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicationId }) => {
+  const {
+    document,
+    selection,
+    history,
+    autosave,
+    pagination,
+    selectPage,
+    createMaster,
+    duplicateMaster,
+    deleteMaster,
+    setDefaultMaster,
+    renameMaster,
+    updatePageMaster,
+    applyTemplatePreset,
+    updateDocumentMeta,
+    updatePageNumbering,
+    updatePrintGuides,
+    updateMasterBackground,
+    toggleMasterLock,
+    updateMasterDecoration,
+    updateGlobalMasterDecoration,
+    updateMasterZoneFrame,
+    addMasterTextDecoration,
+    addMasterImageDecoration,
+    removeMasterDecoration,
+    toggleMasterDecorationLock,
+    toggleMasterZoneLock,
+    updateThreadRuns,
+    updateThreadRole,
+    updateThreadStyleOverride,
+    toggleThreadToc,
+    addThread,
+    addImageBlock,
+    updateImageBlock,
+    toggleBlockLock,
+    applyPaginationResult,
+    undo,
+    redo,
+  } = usePublishingStore();
+  const selectBlockInStore = usePublishingStore((state) => state.selectBlock);
+  const [imageUrl, setImageUrl] = useState('');
+  const [uploadingImage, setUploadingImage] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploadingMasterImage, setUploadingMasterImage] = useState(false);
+  const [masterUploadProgress, setMasterUploadProgress] = useState(0);
+  const [templateSelection, setTemplateSelection] = useState<TemplateSelection>({ type: null, id: null });
+  const [validationReport, setValidationReport] = useState<ValidationReport | null>(null);
+  const [globalFixedManagerMode, setGlobalFixedManagerMode] = useState(false);
+  const [showPreflightModal, setShowPreflightModal] = useState(false);
+  const [newMasterName, setNewMasterName] = useState('');
+  const [newMasterPreset, setNewMasterPreset] = useState<TemplatePresetKey>('single-column');
+  const [showCreateMasterModal, setShowCreateMasterModal] = useState(false);
+  const [activeMasterId, setActiveMasterId] = useState<string | null>(null);
+  const pageRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const pdfPageRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const measurementRootRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!measurementRootRef.current || !pagination.invalidatedThreadIds.length) {
+      return;
+    }
+
+    pagination.invalidatedThreadIds.forEach((threadId) => {
+      const segments = paginateThreadWithDom(document, threadId, measurementRootRef.current!);
+      if (segments.length) {
+        applyPaginationResult(threadId, segments);
+      }
+    });
+  }, [applyPaginationResult, document, pagination.invalidatedThreadIds]);
+
+  const selectedPage = document.pages.find((item) => item.id === selection.pageId) ?? document.pages[1] ?? document.pages[0];
+  const pageMaster = document.masters.items.find((item) => item.id === selectedPage?.masterId) ?? document.masters.items[0];
+  const selectedMaster = document.masters.items.find((item) => item.id === activeMasterId) ?? pageMaster ?? document.masters.items[0];
+  const selectedZoneId =
+    (selection.zoneId && pageMaster?.contentZones.some((zone) => zone.id === selection.zoneId) ? selection.zoneId : undefined)
+    ?? pageMaster?.contentZones
+      .filter((zone) => zone.kind === 'text-flow')
+      .sort((left, right) => (left.flowOrder ?? 0) - (right.flowOrder ?? 0))[0]?.id
+    ?? selectedPage?.zones[0]?.zoneId
+    ?? 'body_main';
+
+  useEffect(() => {
+    if (!activeMasterId && pageMaster?.id) {
+      setActiveMasterId(pageMaster.id);
+      return;
+    }
+
+    if (activeMasterId && !document.masters.items.some((item) => item.id === activeMasterId)) {
+      setActiveMasterId(pageMaster?.id ?? document.masters.items[0]?.id ?? null);
+    }
+  }, [activeMasterId, document.masters.items, pageMaster?.id]);
+
+  const handleCreateMaster = () => {
+    createMaster(newMasterName || undefined, newMasterPreset);
+    const createdMaster = usePublishingStore.getState().document.masters.items.at(-1);
+    if (createdMaster) {
+      setActiveMasterId(createdMaster.id);
+    }
+    setNewMasterName('');
+    setNewMasterPreset('single-column');
+    setShowCreateMasterModal(false);
+  };
+  const selectedThread = useMemo(() => {
+    if (!selection.blockId) {
+      return null;
+    }
+
+    for (const thread of document.threads) {
+      const match = document.pages.some((page) =>
+        page.zones.some((zone) =>
+          zone.blocks.some(
+            (block) => block.type === 'text' && block.id === selection.blockId && block.flow.sourceThreadId === thread.id,
+          ),
+        ),
+      );
+      if (match) {
+        return thread;
+      }
+    }
+    return null;
+  }, [document.pages, document.threads, selection.blockId]);
+
+  const selectedBlock = useMemo(() => {
+    const page = document.pages.find((item) => item.id === selection.pageId);
+    const zone = page?.zones.find((item) => item.zoneId === selection.zoneId);
+    return zone?.blocks.find((item) => item.id === selection.blockId) ?? null;
+  }, [document.pages, selection.blockId, selection.pageId, selection.zoneId]);
+  const selectedDecoration = selectedMaster?.decorations.find((item) => templateSelection.type === 'decoration' && item.id === templateSelection.id) ?? null;
+  const selectedZoneTemplate = selectedMaster?.contentZones.find((item) => templateSelection.type === 'zone' && item.id === templateSelection.id) ?? null;
+  const recommendedPreset = getRecommendedPreset(document.meta.sourcePublicationType, document.meta.publicationType);
+  const pxPerMm = getPxPerMm(document.layout.pagePreset);
+  const alignmentWarningThresholdPx = document.layout.printGuides.alignmentWarningThresholdPx ?? 0.75;
+  const pageNumberAlignmentPreset = document.layout.pageNumbering.alignmentPreset ?? 'center';
+  const pageNumberMirrorOnEvenPages = document.layout.pageNumbering.mirrorOnEvenPages ?? false;
+  const selectedDecorationEditable = Boolean(
+    selectedDecoration
+    && !selectedDecoration.locked
+    && (
+      selectedDecoration.scope === 'global-fixed'
+        ? globalFixedManagerMode
+        : !selectedMaster?.locked
+    ),
+  );
+  const selectedZoneEditable = Boolean(
+    selectedZoneTemplate && !selectedMaster?.locked && selectedZoneTemplate.scope !== 'global-fixed' && !selectedZoneTemplate.locked,
+  );
+  const globalFixedDecorations = selectedMaster?.decorations.filter((item) => item.scope === 'global-fixed') ?? [];
+  const groupedGlobalFixedDecorations = useMemo(() => {
+    return globalFixedDecorations.reduce<Record<string, typeof globalFixedDecorations>>((acc, decoration) => {
+      const category = getDecorationCategoryLabel(decoration);
+      acc[category] = acc[category] ?? [];
+      acc[category].push(decoration);
+      return acc;
+    }, {});
+  }, [globalFixedDecorations]);
+  const preflightIssues = useMemo<PreflightIssue[]>(() => {
+    const issues: PreflightIssue[] = [];
+
+    if (!document.meta.title.ko.trim()) {
+      issues.push({
+        id: 'missing-document-title',
+        severity: 'error',
+        message: '문서 제목이 비어 있습니다.',
+      });
+    }
+
+    if (validationReport) {
+      const maxDeltaPx = getMaxValidationDeltaPx(validationReport);
+      if (maxDeltaPx > alignmentWarningThresholdPx) {
+        issues.push({
+          id: 'alignment-delta',
+          severity: 'error',
+          message: `출력 오차가 기준치를 초과했습니다: ${maxDeltaPx.toFixed(3)}px`,
+          pageId: selectedPage?.id,
+        });
+      }
+    }
+
+    const pageNumberDecorations = document.masters.items.flatMap((master) =>
+      master.decorations.filter((decoration) => decoration.textBinding === 'page.number'),
+    );
+    if (document.layout.pageNumbering.enabled && pageNumberDecorations.length === 0) {
+      issues.push({
+        id: 'missing-page-number-decoration',
+        severity: 'error',
+        message: '페이지 번호 표시가 켜져 있지만 페이지 번호 장식이 없습니다.',
+      });
+    }
+
+    const tocEnabledThreads = document.threads.filter((thread) => thread.ebook.toc.enabled);
+    if (tocEnabledThreads.length > 0 && document.toc.items.length === 0) {
+      issues.push({
+        id: 'empty-toc',
+        severity: 'warning',
+        message: 'TOC가 활성화된 텍스트가 있지만 목차 항목이 비어 있습니다.',
+      });
+    }
+
+    document.pages.forEach((page) => {
+      const master = document.masters.items.find((item) => item.id === page.masterId);
+      if (!master) {
+        return;
+      }
+
+      const hasSectionNumberDecoration = master.decorations.some((decoration) => decoration.textBinding === 'section.number');
+      if (hasSectionNumberDecoration) {
+        const hasTopLevelToc = document.toc.items.some((item) => item.level === 1 && item.source.pageId === page.id);
+        if (!hasTopLevelToc) {
+          issues.push({
+            id: `${page.id}-section-number-missing`,
+            severity: 'warning',
+            message: `${page.id}의 섹션 번호 기준이 없습니다.`,
+            pageId: page.id,
+          });
+        }
+      }
+
+      master.contentZones.forEach((zone) => {
+        const safeLeft = document.layout.pagePreset.safeMarginPx.left;
+        const safeTop = document.layout.pagePreset.safeMarginPx.top;
+        const safeRight = document.layout.pagePreset.widthPx - document.layout.pagePreset.safeMarginPx.right;
+        const safeBottom = document.layout.pagePreset.heightPx - document.layout.pagePreset.safeMarginPx.bottom;
+        const zoneRight = zone.frame.x + zone.frame.width;
+        const zoneBottom = zone.frame.y + zone.frame.height;
+
+        if (zone.frame.x < safeLeft || zone.frame.y < safeTop || zoneRight > safeRight || zoneBottom > safeBottom) {
+          issues.push({
+            id: `${page.id}-${zone.id}-safe-area`,
+            severity: 'error',
+            message: `${page.id}의 ${zone.name} 영역이 안전영역을 벗어났습니다.`,
+            pageId: page.id,
+          });
+        }
+      });
+
+      page.zones.forEach((zoneInstance) => {
+        const zoneTemplate = master.contentZones.find((item) => item.id === zoneInstance.zoneId);
+        zoneInstance.blocks.forEach((block) => {
+          if (block.type === 'image') {
+            if (!block.assetRef.src.trim()) {
+              issues.push({
+                id: `${page.id}-${block.id}-missing-image-src`,
+                severity: 'error',
+                message: `${page.id}의 이미지 ${block.id} 소스가 비어 있습니다.`,
+                pageId: page.id,
+                blockId: block.id,
+              });
+            }
+
+            const imageRight = zoneTemplate ? zoneTemplate.frame.x + block.placement.x + block.placement.width : block.placement.x + block.placement.width;
+            const imageBottom = zoneTemplate ? zoneTemplate.frame.y + block.placement.y + block.placement.height : block.placement.y + block.placement.height;
+            const zoneWidth = zoneTemplate?.frame.width ?? document.layout.pagePreset.widthPx;
+            const zoneHeight = zoneTemplate?.frame.height ?? document.layout.pagePreset.heightPx;
+            if (
+              block.placement.x < 0
+              || block.placement.y < 0
+              || block.placement.x + block.placement.width > zoneWidth
+              || block.placement.y + block.placement.height > zoneHeight
+            ) {
+              issues.push({
+                id: `${page.id}-${block.id}-zone-overflow`,
+                severity: 'warning',
+                message: `${page.id}의 이미지 ${block.id}가 텍스트 영역을 벗어날 수 있습니다.`,
+                pageId: page.id,
+                blockId: block.id,
+              });
+            }
+            if (
+              imageRight > document.layout.pagePreset.widthPx - document.layout.pagePreset.safeMarginPx.right
+              || imageBottom > document.layout.pagePreset.heightPx - document.layout.pagePreset.safeMarginPx.bottom
+            ) {
+              issues.push({
+                id: `${page.id}-${block.id}-safe-overflow`,
+                severity: 'error',
+                message: `${page.id}의 이미지 ${block.id}가 안전영역 하단 또는 우측을 침범했습니다.`,
+                pageId: page.id,
+                blockId: block.id,
+              });
+            }
+          }
+
+          if (block.type === 'text') {
+            const plainText = block.content.runs.map((run) => run.text).join('').trim();
+            if (!plainText) {
+              issues.push({
+                id: `${page.id}-${block.id}-empty-text`,
+                severity: 'warning',
+                message: `${page.id}의 텍스트 ${block.id} 내용이 비어 있습니다.`,
+                pageId: page.id,
+                blockId: block.id,
+              });
+            }
+
+            const resolvedFontSize = block.styleOverride?.fontSize ?? zoneTemplate?.style.fontSize ?? 14;
+            if (resolvedFontSize < 10) {
+              issues.push({
+                id: `${page.id}-${block.id}-small-font`,
+                severity: 'warning',
+                message: `${page.id}의 텍스트 ${block.id} 폰트 크기가 너무 작습니다 (${resolvedFontSize}px).`,
+                pageId: page.id,
+                blockId: block.id,
+              });
+            }
+          }
+        });
+      });
+    });
+
+    return issues.filter((issue, index, array) => array.findIndex((item) => item.id === issue.id) === index);
+  }, [alignmentWarningThresholdPx, document.layout.pageNumbering.enabled, document.layout.pagePreset, document.masters.items, document.pages, document.threads, document.toc.items.length, selectedPage?.id, validationReport]);
+  const templateDecorations = selectedMaster?.decorations.filter((item) => item.scope !== 'global-fixed') ?? [];
+  const editableZones = selectedMaster?.contentZones.filter((item) => item.scope !== 'global-fixed') ?? [];
+  const validationMarkers = {
+    topLeft: { x: 0, y: 0 },
+    topCenter: { x: document.layout.pagePreset.widthPx / 2, y: 0 },
+    topRight: { x: document.layout.pagePreset.widthPx, y: 0 },
+    bottomLeft: { x: 0, y: document.layout.pagePreset.heightPx },
+    bottomCenter: { x: document.layout.pagePreset.widthPx / 2, y: document.layout.pagePreset.heightPx },
+    bottomRight: { x: document.layout.pagePreset.widthPx, y: document.layout.pagePreset.heightPx },
+  };
+
+  useEffect(() => {
+    if (!selectedPage) {
+      setValidationReport(null);
+      return;
+    }
+
+    const interactivePage = pageRefs.current[selectedPage.id];
+    const exportPage = pdfPageRefs.current[selectedPage.id];
+    if (!interactivePage || !exportPage) {
+      setValidationReport(null);
+      return;
+    }
+
+    const interactiveRect = interactivePage.getBoundingClientRect();
+    const exportRect = exportPage.getBoundingClientRect();
+    const markerKeys = ['top-left', 'top-center', 'top-right', 'bottom-left', 'bottom-center', 'bottom-right'];
+    const markerDeltaPx: Record<string, { x: number; y: number }> = {};
+
+    markerKeys.forEach((key) => {
+      const interactiveMarker = interactivePage.querySelector<HTMLElement>(`[data-validation-marker="${key}"]`);
+      const exportMarker = exportPage.querySelector<HTMLElement>(`[data-validation-marker="${key}"]`);
+      if (!interactiveMarker || !exportMarker) {
+        return;
+      }
+
+      const interactiveMarkerRect = interactiveMarker.getBoundingClientRect();
+      const exportMarkerRect = exportMarker.getBoundingClientRect();
+      markerDeltaPx[key] = {
+        x: Number(
+          (
+            (interactiveMarkerRect.left - interactiveRect.left) -
+            (exportMarkerRect.left - exportRect.left)
+          ).toFixed(3),
+        ),
+        y: Number(
+          (
+            (interactiveMarkerRect.top - interactiveRect.top) -
+            (exportMarkerRect.top - exportRect.top)
+          ).toFixed(3),
+        ),
+      };
+    });
+
+    setValidationReport({
+      pageSizeDeltaPx: {
+        width: Number((interactiveRect.width - exportRect.width).toFixed(3)),
+        height: Number((interactiveRect.height - exportRect.height).toFixed(3)),
+      },
+      markerDeltaPx,
+    });
+  }, [document, history.revision, selectedPage]);
+
+  const handleDownloadPdf = useCallback(async () => {
+    if (preflightIssues.length > 0) {
+      setShowPreflightModal(true);
+      return;
+    }
+
+    const maxDeltaPx = getMaxValidationDeltaPx(validationReport);
+    if (validationReport && maxDeltaPx > alignmentWarningThresholdPx) {
+      const maxDeltaMm = formatMm(pxToMm(maxDeltaPx, document.layout.pagePreset));
+      const shouldContinue = window.confirm(
+        `편집기와 PDF 출력 기준 사이에 최대 ${maxDeltaPx.toFixed(3)} px (${maxDeltaMm}) 오차가 감지되었습니다. 그대로 PDF를 다운로드할까요?`,
+      );
+      if (!shouldContinue) {
+        showToast('PDF 다운로드 취소', 'error');
+        return;
+      }
+    }
+
+    await downloadPagesAsPdf(
+      document.pages
+        .map((page) => pdfPageRefs.current[page.id] ?? pageRefs.current[page.id])
+        .filter((page): page is HTMLDivElement => page instanceof HTMLDivElement),
+      document.meta.title.ko,
+      document.layout.pagePreset,
+    );
+  }, [alignmentWarningThresholdPx, document.layout.pagePreset, document.meta.title.ko, document.pages, preflightIssues, validationReport]);
+
+  const handleConfirmPdfDownload = useCallback(async () => {
+    setShowPreflightModal(false);
+
+    const maxDeltaPx = getMaxValidationDeltaPx(validationReport);
+    if (validationReport && maxDeltaPx > alignmentWarningThresholdPx) {
+      const maxDeltaMm = formatMm(pxToMm(maxDeltaPx, document.layout.pagePreset));
+      const shouldContinue = window.confirm(
+        `편집기와 PDF 출력 기준 사이에 최대 ${maxDeltaPx.toFixed(3)} px (${maxDeltaMm}) 오차가 감지되었습니다. 그대로 PDF를 다운로드할까요?`,
+      );
+      if (!shouldContinue) {
+        showToast('PDF 다운로드 취소', 'error');
+        return;
+      }
+    }
+
+    await downloadPagesAsPdf(
+      document.pages
+        .map((page) => pdfPageRefs.current[page.id] ?? pageRefs.current[page.id])
+        .filter((page): page is HTMLDivElement => page instanceof HTMLDivElement),
+      document.meta.title.ko,
+      document.layout.pagePreset,
+    );
+  }, [alignmentWarningThresholdPx, document.layout.pagePreset, document.meta.title.ko, document.pages, validationReport]);
+
+  const handleAddImage = useCallback(() => {
+    if (!selectedPage || !selectedZoneId || !imageUrl.trim()) {
+      return;
+    }
+
+    addImageBlock(selectedPage.id, selectedZoneId, {
+      src: imageUrl.trim(),
+      naturalWidth: 1600,
+      naturalHeight: 1200,
+    });
+    setImageUrl('');
+  }, [addImageBlock, imageUrl, selectedPage, selectedZoneId]);
+
+  const handleUploadFile = useCallback(
+    async (event: React.ChangeEvent<HTMLInputElement>) => {
+      const file = event.target.files?.[0];
+      if (!file || !selectedPage || !selectedZoneId) {
+        return;
+      }
+
+      try {
+        setUploadingImage(true);
+        setUploadProgress(0);
+        const uploaded = await uploadPublicationImage(publicationId, file, setUploadProgress);
+        addImageBlock(selectedPage.id, selectedZoneId, uploaded);
+        showToast('이미지가 Firebase Storage에 업로드되었습니다.', 'success');
+      } catch (error) {
+        logError(error, 'PublishingEditor-uploadImage');
+        showToast('이미지 업로드에 실패했습니다.', 'error');
+      } finally {
+        setUploadingImage(false);
+        setUploadProgress(0);
+        event.target.value = '';
+      }
+    },
+    [addImageBlock, publicationId, selectedPage, selectedZoneId],
+  );
+
+  const handleUploadMasterFile = useCallback(
+    async (event: React.ChangeEvent<HTMLInputElement>) => {
+      const file = event.target.files?.[0];
+      if (!file || !selectedMaster) {
+        return;
+      }
+
+      try {
+        setUploadingMasterImage(true);
+        setMasterUploadProgress(0);
+        const uploaded = await uploadPublicationImage(publicationId, file, setMasterUploadProgress);
+        addMasterImageDecoration(selectedMaster.id, uploaded);
+        showToast('마스터 이미지가 업로드되었습니다.', 'success');
+      } catch (error) {
+        logError(error, 'PublishingEditor-uploadMasterImage');
+        showToast('마스터 이미지 업로드에 실패했습니다.', 'error');
+      } finally {
+        setUploadingMasterImage(false);
+        setMasterUploadProgress(0);
+        event.target.value = '';
+      }
+    },
+    [addMasterImageDecoration, publicationId, selectedMaster],
+  );
+
+  const updateSelectedDecorationFields = useCallback(
+    (
+      decorationId: string,
+      updates: Partial<{
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+        text: string;
+        fill: string;
+        style: {
+          fontSize?: number;
+          fontWeight?: number;
+          textAlign?: 'left' | 'center' | 'right' | 'justify';
+          color?: string;
+        };
+      }>,
+    ) => {
+      if (!selectedMaster) {
+        return;
+      }
+
+      const decoration = selectedMaster.decorations.find((item) => item.id === decorationId);
+      if (!decoration) {
+        return;
+      }
+
+      if (decoration.scope === 'global-fixed') {
+        if (!globalFixedManagerMode) {
+          return;
+        }
+        updateGlobalMasterDecoration(selectedMaster.id, decorationId, updates);
+        return;
+      }
+
+      updateMasterDecoration(selectedMaster.id, decorationId, updates);
+    },
+    [globalFixedManagerMode, selectedMaster, updateGlobalMasterDecoration, updateMasterDecoration],
+  );
+
+  const jumpToIssue = useCallback((issue: PreflightIssue) => {
+    if (!issue.pageId) {
+      return;
+    }
+
+    selectPage(issue.pageId);
+    const pageNode = pageRefs.current[issue.pageId];
+    pageNode?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+    if (issue.blockId) {
+      const page = document.pages.find((item) => item.id === issue.pageId);
+      const zone = page?.zones.find((zoneItem) => zoneItem.blocks.some((block) => block.id === issue.blockId));
+      if (zone) {
+        selectBlockInStore(issue.pageId, zone.zoneId, issue.blockId);
+      }
+    }
+  }, [document.pages, selectBlockInStore, selectPage]);
+
+  return (
+    <div className="flex min-h-[calc(100vh-4rem)] bg-[#f3efe7] text-slate-900">
+      <aside className="editor-sidebar w-[360px] border-r border-slate-200 bg-white/90 px-5 py-6">
+        <div className="mb-6">
+          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Document</p>
+          <input
+            value={document.meta.title.ko}
+            onChange={(event) => updateDocumentMeta(event.target.value, document.meta.title.en || '')}
+            className="mt-3 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-lg font-semibold outline-none transition focus:border-slate-400"
+          />
+          {selectedPage ? (
+            <select
+              value={selectedPage.masterId}
+              onChange={(event) => updatePageMaster(selectedPage.id, event.target.value)}
+              className="mt-3 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium outline-none transition focus:border-slate-400"
+            >
+              {document.masters.items.map((master) => (
+                <option key={master.id} value={master.id}>
+                  {master.name}
+                </option>
+              ))}
+            </select>
+          ) : null}
+        </div>
+
+        <div className="editor-toolbar mb-6 flex flex-wrap gap-2">
+          <button type="button" onClick={undo} className="rounded-full border border-slate-200 px-4 py-2 text-sm font-medium">
+            실행 취소
+          </button>
+          <button type="button" onClick={redo} className="rounded-full border border-slate-200 px-4 py-2 text-sm font-medium">
+            다시 실행
+          </button>
+          {selectedPage ? (
+            <>
+              <button
+                type="button"
+                onClick={() => addThread(selectedPage.id, selectedZoneId, 'heading')}
+                className="inline-flex items-center gap-2 rounded-full border border-slate-200 px-4 py-2 text-sm font-medium"
+              >
+                <PlusIcon className="h-4 w-4" />
+                헤딩 추가
+              </button>
+              <button
+                type="button"
+                onClick={() => addThread(selectedPage.id, selectedZoneId, 'paragraph')}
+                className="inline-flex items-center gap-2 rounded-full border border-slate-200 px-4 py-2 text-sm font-medium"
+              >
+                <PlusIcon className="h-4 w-4" />
+                본문 추가
+              </button>
+            </>
+          ) : null}
+        </div>
+
+        <div className="mb-6 rounded-3xl border border-slate-200 bg-slate-50 p-4">
+          <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-slate-800">
+            <PhotoIcon className="h-4 w-4" />
+            이미지 추가
+          </div>
+          <input
+            value={imageUrl}
+            onChange={(event) => setImageUrl(event.target.value)}
+            placeholder="https://example.com/image.jpg"
+            className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none"
+          />
+          <button
+            type="button"
+            onClick={handleAddImage}
+            className="mt-3 inline-flex items-center gap-2 rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white"
+          >
+            <PhotoIcon className="h-4 w-4" />
+            현재 페이지에 삽입
+          </button>
+          <label className="mt-3 flex cursor-pointer items-center justify-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700">
+            <PhotoIcon className="h-4 w-4" />
+            Storage 업로드
+            <input type="file" accept="image/*" onChange={handleUploadFile} className="hidden" />
+          </label>
+          {uploadingImage ? <p className="mt-3 text-xs text-slate-500">업로드 중... {Math.round(uploadProgress * 100)}%</p> : null}
+          <p className="mt-2 text-xs text-slate-400">업로드 후 배치</p>
+        </div>
+
+        <div className="mb-6 rounded-3xl border border-slate-200 bg-slate-50 p-4">
+          <div className="mb-3 text-sm font-semibold text-slate-800">페이지 번호</div>
+          <label className="mb-3 flex items-center justify-between rounded-2xl bg-white px-4 py-3 text-sm">
+            <span>표시</span>
+            <input
+              type="checkbox"
+              checked={document.layout.pageNumbering.enabled}
+              onChange={(event) => updatePageNumbering({ enabled: event.target.checked })}
+            />
+          </label>
+          <label className="mb-3 flex items-center justify-between rounded-2xl bg-white px-4 py-3 text-sm">
+            <span>표지에도 표시</span>
+            <input
+              type="checkbox"
+              checked={document.layout.pageNumbering.showOnCover}
+              onChange={(event) => updatePageNumbering({ showOnCover: event.target.checked })}
+            />
+          </label>
+          <label className="flex items-center justify-between rounded-2xl bg-white px-4 py-3 text-sm">
+            <span>시작 번호</span>
+            <input
+              type="number"
+              min={1}
+              value={document.layout.pageNumbering.startAt}
+              onChange={(event) => updatePageNumbering({ startAt: Math.max(1, Number(event.target.value) || 1) })}
+              className="w-20 rounded-xl border border-slate-200 px-3 py-1 text-right"
+            />
+          </label>
+          <label className="mt-3 flex items-center justify-between rounded-2xl bg-white px-4 py-3 text-sm">
+            <span>기본 정렬</span>
+            <select
+              value={pageNumberAlignmentPreset}
+              onChange={(event) =>
+                updatePageNumbering({
+                  alignmentPreset: event.target.value as 'left' | 'center' | 'right',
+                })
+              }
+              className="rounded-xl border border-slate-200 px-3 py-1"
+            >
+              <option value="left">Left</option>
+              <option value="center">Center</option>
+              <option value="right">Right</option>
+            </select>
+          </label>
+          <div className="mt-3 grid grid-cols-3 gap-2">
+            <button
+              type="button"
+              onClick={() => updatePageNumbering({ alignmentPreset: 'center', mirrorOnEvenPages: false })}
+              className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700"
+            >
+              중앙 하단
+            </button>
+            <button
+              type="button"
+              onClick={() => updatePageNumbering({ alignmentPreset: 'right', mirrorOnEvenPages: true })}
+              className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700"
+            >
+              바깥쪽 하단
+            </button>
+            <button
+              type="button"
+              onClick={() => updatePageNumbering({ alignmentPreset: 'left', mirrorOnEvenPages: true })}
+              className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700"
+            >
+              안쪽 하단
+            </button>
+          </div>
+          <label className="mt-3 flex items-center justify-between rounded-2xl bg-white px-4 py-3 text-sm">
+            <span>짝수 페이지 미러링</span>
+            <input
+              type="checkbox"
+              checked={pageNumberMirrorOnEvenPages}
+              onChange={(event) => updatePageNumbering({ mirrorOnEvenPages: event.target.checked })}
+            />
+          </label>
+        </div>
+
+        <div className="mb-6 rounded-3xl border border-slate-200 bg-slate-50 p-4">
+          <div className="mb-3 text-sm font-semibold text-slate-800">출력 가이드</div>
+          <label className="mb-3 flex items-center justify-between rounded-2xl bg-white px-4 py-3 text-sm">
+            <span>안전 영역</span>
+            <input
+              type="checkbox"
+              checked={document.layout.printGuides.showSafeArea}
+              onChange={(event) => updatePrintGuides({ showSafeArea: event.target.checked })}
+            />
+          </label>
+          <label className="mb-3 flex items-center justify-between rounded-2xl bg-white px-4 py-3 text-sm">
+            <span>중앙선</span>
+            <input
+              type="checkbox"
+              checked={document.layout.printGuides.showCenterLine}
+              onChange={(event) => updatePrintGuides({ showCenterLine: event.target.checked })}
+            />
+          </label>
+          <label className="flex items-center justify-between rounded-2xl bg-white px-4 py-3 text-sm">
+            <span>컨텐츠 경계</span>
+            <input
+              type="checkbox"
+              checked={document.layout.printGuides.showContentBounds}
+              onChange={(event) => updatePrintGuides({ showContentBounds: event.target.checked })}
+            />
+          </label>
+          <label className="mt-3 flex items-center justify-between rounded-2xl bg-white px-4 py-3 text-sm">
+            <span>검증 마커</span>
+            <input
+              type="checkbox"
+              checked={document.layout.printGuides.showValidationMarks}
+              onChange={(event) => updatePrintGuides({ showValidationMarks: event.target.checked })}
+            />
+          </label>
+          <label className="mt-3 flex items-center justify-between rounded-2xl bg-white px-4 py-3 text-sm">
+            <span>오차 경고 기준 (px)</span>
+            <input
+              type="number"
+              min={0}
+              step="0.05"
+              value={alignmentWarningThresholdPx}
+              onChange={(event) =>
+                updatePrintGuides({ alignmentWarningThresholdPx: Math.max(0, Number(event.target.value) || 0) })
+              }
+              className="w-24 rounded-xl border border-slate-200 px-3 py-1 text-right"
+            />
+          </label>
+          <div className="mt-3 rounded-2xl bg-white px-4 py-3 text-xs text-slate-500">
+            <p>A4: {document.layout.pagePreset.widthMm} x {document.layout.pagePreset.heightMm} mm</p>
+            <p>Canvas: {document.layout.pagePreset.widthPx} x {document.layout.pagePreset.heightPx} px</p>
+            <p>Scale: 1 mm = {pxPerMm.toFixed(3)} px</p>
+            <p>Safe Top: {formatMm(pxToMm(document.layout.pagePreset.safeMarginPx.top, document.layout.pagePreset))}</p>
+            <p>
+              Warning Threshold: {alignmentWarningThresholdPx.toFixed(2)} px /{' '}
+              {formatMm(pxToMm(alignmentWarningThresholdPx, document.layout.pagePreset))}
+            </p>
+          </div>
+        </div>
+
+        {selectedMaster ? (
+          <div className="mb-6 rounded-3xl border border-slate-200 bg-slate-50 p-4">
+            <div className="mb-3 flex items-center justify-between">
+              <div>
+                <div className="text-sm font-semibold text-slate-800">전역 고정 요소</div>
+                <div className="text-xs text-slate-500">공통 요소</div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setGlobalFixedManagerMode((value) => !value)}
+                className={`rounded-full px-3 py-2 text-xs font-semibold ${globalFixedManagerMode ? 'bg-slate-900 text-white' : 'bg-white text-slate-700'}`}
+              >
+                {globalFixedManagerMode ? '관리자 모드 ON' : '관리자 모드 OFF'}
+              </button>
+            </div>
+            <div className="space-y-3">
+              {Object.entries(groupedGlobalFixedDecorations).map(([category, decorations]) => (
+                <div key={category} className="space-y-3">
+                  <div className="px-1 text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">{category}</div>
+                  {decorations.map((decoration) => (
+                    <div key={decoration.id} className="rounded-2xl bg-white p-3 text-sm text-slate-600">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <p className="font-semibold text-slate-800">
+                            {decoration.textBinding === 'page.number'
+                              ? '페이지 번호'
+                              : decoration.type === 'image'
+                                ? '전역 이미지'
+                                : decoration.type === 'shape'
+                                  ? '전역 도형'
+                                  : '전역 텍스트'}
+                          </p>
+                          <p className="text-xs text-slate-500">{decoration.id}</p>
+                        </div>
+                        <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">global-fixed</span>
+                      </div>
+                      {globalFixedManagerMode ? (
+                        <div className="mt-3 space-y-3">
+                          <div className="grid grid-cols-2 gap-2">
+                            <label className="block">
+                              <span className="mb-1 block text-xs text-slate-400">X</span>
+                              <input
+                                type="number"
+                                value={decoration.x}
+                                onChange={(event) => updateSelectedDecorationFields(decoration.id, { x: Number(event.target.value) || 0 })}
+                                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                              />
+                            </label>
+                            <label className="block">
+                              <span className="mb-1 block text-xs text-slate-400">Y</span>
+                              <input
+                                type="number"
+                                value={decoration.y}
+                                onChange={(event) => updateSelectedDecorationFields(decoration.id, { y: Number(event.target.value) || 0 })}
+                                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                              />
+                            </label>
+                            <label className="block">
+                              <span className="mb-1 block text-xs text-slate-400">Width</span>
+                              <input
+                                type="number"
+                                value={decoration.width}
+                                onChange={(event) => updateSelectedDecorationFields(decoration.id, { width: Number(event.target.value) || 1 })}
+                                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                              />
+                            </label>
+                            <label className="block">
+                              <span className="mb-1 block text-xs text-slate-400">Height</span>
+                              <input
+                                type="number"
+                                value={decoration.height}
+                                onChange={(event) => updateSelectedDecorationFields(decoration.id, { height: Number(event.target.value) || 1 })}
+                                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                              />
+                            </label>
+                          </div>
+                          {decoration.type !== 'shape' ? (
+                            <div className="grid grid-cols-2 gap-2">
+                              <label className="block">
+                                <span className="mb-1 block text-xs text-slate-400">글자 크기</span>
+                                <input
+                                  type="number"
+                                  value={decoration.style?.fontSize ?? 12}
+                                  onChange={(event) =>
+                                    updateSelectedDecorationFields(decoration.id, { style: { fontSize: Number(event.target.value) || 12 } })
+                                  }
+                                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                                />
+                              </label>
+                              <label className="block">
+                                <span className="mb-1 block text-xs text-slate-400">글자 두께</span>
+                                <input
+                                  type="number"
+                                  value={decoration.style?.fontWeight ?? 400}
+                                  onChange={(event) =>
+                                    updateSelectedDecorationFields(decoration.id, { style: { fontWeight: Number(event.target.value) || 400 } })
+                                  }
+                                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                                />
+                              </label>
+                              <label className="block">
+                                <span className="mb-1 block text-xs text-slate-400">정렬</span>
+                                <select
+                                  value={decoration.style?.textAlign ?? 'center'}
+                                  onChange={(event) =>
+                                    updateSelectedDecorationFields(decoration.id, {
+                                      style: { textAlign: event.target.value as 'left' | 'center' | 'right' | 'justify' },
+                                    })
+                                  }
+                                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                                >
+                                  <option value="left">Left</option>
+                                  <option value="center">Center</option>
+                                  <option value="right">Right</option>
+                                  <option value="justify">Justify</option>
+                                </select>
+                              </label>
+                              <label className="block">
+                                <span className="mb-1 block text-xs text-slate-400">색상</span>
+                                <input
+                                  type="color"
+                                  value={decoration.style?.color ?? '#666666'}
+                                  onChange={(event) =>
+                                    updateSelectedDecorationFields(decoration.id, { style: { color: event.target.value } })
+                                  }
+                                  className="h-10 w-full rounded-xl border border-slate-200 p-1"
+                                />
+                              </label>
+                            </div>
+                          ) : null}
+                          <p className="text-xs text-slate-500">위치/스타일 편집</p>
+                        </div>
+                      ) : (
+                        <>
+                          <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-slate-500">
+                            <p>X: {decoration.x}px / {formatMm(pxToMm(decoration.x, document.layout.pagePreset))}</p>
+                            <p>Y: {decoration.y}px / {formatMm(pxToMm(decoration.y, document.layout.pagePreset))}</p>
+                            <p>W: {decoration.width}px / {formatMm(pxToMm(decoration.width, document.layout.pagePreset))}</p>
+                            <p>H: {decoration.height}px / {formatMm(pxToMm(decoration.height, document.layout.pagePreset))}</p>
+                          </div>
+                          <p className="mt-2 text-xs text-amber-700">관리자 모드 필요</p>
+                        </>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
+        {selectedMaster ? (
+          <div className="mb-6 rounded-3xl border border-slate-200 bg-slate-50 p-4">
+            <div className="mb-4 rounded-2xl bg-white p-3">
+              <div className="mb-3 flex items-center justify-between">
+                <div>
+                  <div className="text-sm font-semibold text-slate-800">마스터 관리</div>
+                  <div className="text-xs text-slate-500">생성, 복제, 삭제</div>
+                </div>
+                <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
+                  {document.masters.defaultMasterId === selectedMaster.id ? 'default' : 'custom'}
+                </span>
+              </div>
+              <div className="mb-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                <p className="text-sm font-semibold text-slate-800">새 마스터</p>
+                <p className="mt-1 text-xs text-slate-500">이름과 프리셋 선택</p>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowCreateMasterModal(true)}
+                  className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700"
+                >
+                  새 마스터
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    duplicateMaster(selectedMaster.id);
+                    const createdMaster = usePublishingStore.getState().document.masters.items.at(-1);
+                    if (createdMaster) {
+                      setActiveMasterId(createdMaster.id);
+                    }
+                  }}
+                  className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700"
+                >
+                  현재 마스터 복제
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDefaultMaster(selectedMaster.id)}
+                  disabled={document.masters.defaultMasterId === selectedMaster.id}
+                  className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  기본 마스터 지정
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const fallbackMaster = document.masters.items.find((master) => master.id !== selectedMaster.id);
+                    deleteMaster(selectedMaster.id);
+                    if (fallbackMaster) {
+                      setActiveMasterId(fallbackMaster.id);
+                    }
+                  }}
+                  disabled={document.masters.items.length <= 1 || document.masters.defaultMasterId === selectedMaster.id}
+                  className="rounded-2xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-700 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  현재 마스터 삭제
+                </button>
+              </div>
+              <div className="mt-3 space-y-2">
+                {document.masters.items.map((master) => (
+                  <button
+                    key={master.id}
+                    type="button"
+                    onClick={() => {
+                      setActiveMasterId(master.id);
+                      const pageUsingMaster = document.pages.find((page) => page.masterId === master.id);
+                      if (pageUsingMaster) {
+                        selectPage(pageUsingMaster.id);
+                      }
+                    }}
+                    className={`block w-full rounded-[24px] border px-4 py-3 text-left transition ${master.id === selectedMaster.id ? 'border-slate-900 bg-slate-900 text-white' : 'border-slate-200 bg-slate-50 text-slate-700 hover:border-slate-400'}`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-semibold">{master.name}</span>
+                      <span className="text-xs uppercase tracking-[0.16em]">
+                        {document.masters.defaultMasterId === master.id ? 'default' : 'master'}
+                      </span>
+                    </div>
+                    <div className={`mt-3 rounded-2xl border px-3 py-3 ${master.id === selectedMaster.id ? 'border-white/15 bg-white/10' : 'border-slate-200 bg-white'}`}>
+                      <div className="relative mx-auto aspect-[210/297] w-20 overflow-hidden rounded-xl border border-slate-200 bg-white">
+                        <div className="absolute inset-0" style={{ background: master.background.fill }} />
+                        {master.decorations.slice(0, 3).map((decoration) => (
+                          <div
+                            key={decoration.id}
+                            className="absolute rounded-[2px]"
+                            style={{
+                              left: `${(decoration.x / document.layout.pagePreset.widthPx) * 100}%`,
+                              top: `${(decoration.y / document.layout.pagePreset.heightPx) * 100}%`,
+                              width: `${(decoration.width / document.layout.pagePreset.widthPx) * 100}%`,
+                              height: `${Math.max(2, (decoration.height / document.layout.pagePreset.heightPx) * 100)}%`,
+                              background: decoration.type === 'shape' ? decoration.fill ?? '#cbd5e1' : decoration.type === 'image' ? '#cbd5e1' : '#94a3b8',
+                              opacity: 0.9,
+                            }}
+                          />
+                        ))}
+                        {master.contentZones.slice(0, 4).map((zone) => (
+                          <div
+                            key={zone.id}
+                            className="absolute border border-dashed border-sky-400/80"
+                            style={{
+                              left: `${(zone.frame.x / document.layout.pagePreset.widthPx) * 100}%`,
+                              top: `${(zone.frame.y / document.layout.pagePreset.heightPx) * 100}%`,
+                              width: `${(zone.frame.width / document.layout.pagePreset.widthPx) * 100}%`,
+                              height: `${(zone.frame.height / document.layout.pagePreset.heightPx) * 100}%`,
+                            }}
+                          />
+                        ))}
+                      </div>
+                      <div className={`mt-3 grid grid-cols-2 gap-2 text-xs ${master.id === selectedMaster.id ? 'text-slate-200' : 'text-slate-500'}`}>
+                        <p>Zones {master.contentZones.length}</p>
+                        <p>Decor {master.decorations.length}</p>
+                      </div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="mb-3 flex items-center justify-between">
+              <div>
+                <div className="text-sm font-semibold text-slate-800">마스터 템플릿</div>
+                <div className="text-xs text-slate-500">{selectedMaster.name}</div>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => toggleMasterLock(selectedMaster.id)}
+                  className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700"
+                >
+                  {selectedMaster.locked ? <LockClosedIcon className="h-4 w-4" /> : <LockOpenIcon className="h-4 w-4" />}
+                  {selectedMaster.locked ? '마스터 잠금 해제' : '마스터 잠금'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => addMasterTextDecoration(selectedMaster.id)}
+                  disabled={selectedMaster.locked}
+                  className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <PlusIcon className="h-4 w-4" />
+                  장식 추가
+                </button>
+              </div>
+            </div>
+
+            <label className="mb-4 block">
+              <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">마스터 이름</span>
+              <input
+                value={selectedMaster.name}
+                onChange={(event) => renameMaster(selectedMaster.id, event.target.value)}
+                className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium"
+              />
+            </label>
+
+            <label className="mb-4 block">
+              <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">배경 색상</span>
+              <input
+                type="color"
+                value={selectedMaster.background.fill}
+                disabled={selectedMaster.locked}
+                onChange={(event) => updateMasterBackground(selectedMaster.id, event.target.value)}
+                className="h-11 w-full rounded-2xl border border-slate-200 bg-white p-2"
+              />
+            </label>
+
+            <div className="mb-4">
+              <div className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">템플릿 프리셋</div>
+              <button
+                type="button"
+                onClick={() => applyTemplatePreset(selectedMaster.id, recommendedPreset)}
+                disabled={selectedMaster.locked}
+                className="mb-2 w-full rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white"
+              >
+                추천: {TEMPLATE_PRESET_LABELS[recommendedPreset]}
+              </button>
+              <div className="grid grid-cols-2 gap-2">
+                {(Object.keys(TEMPLATE_PRESET_LABELS) as TemplatePresetKey[]).map((preset) => (
+                  <button
+                    key={preset}
+                    type="button"
+                    onClick={() => applyTemplatePreset(selectedMaster.id, preset)}
+                    disabled={selectedMaster.locked}
+                    className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:border-slate-400 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {TEMPLATE_PRESET_LABELS[preset]}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              {templateDecorations.map((decoration) => (
+                <div key={decoration.id} className="rounded-2xl bg-white p-3">
+                  <div className="mb-3 flex items-center justify-between">
+                    <div>
+                      <div className="text-sm font-semibold text-slate-800">
+                        {decoration.textBinding === 'page.number'
+                          ? '페이지 번호'
+                          : decoration.textBinding === 'section.number'
+                            ? '섹션 번호'
+                            : decoration.textBinding === 'document.title'
+                              ? '문서 제목'
+                              : decoration.type === 'text'
+                                ? '텍스트 장식'
+                                : '도형 장식'}
+                      </div>
+                      <div className="text-xs text-slate-500">
+                        {decoration.id} · {decoration.scope} {decoration.locked ? '· locked' : ''}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => toggleMasterDecorationLock(selectedMaster.id, decoration.id)}
+                        className="rounded-full p-2 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+                      >
+                        {decoration.locked ? <LockClosedIcon className="h-4 w-4" /> : <LockOpenIcon className="h-4 w-4" />}
+                      </button>
+                      {!decoration.textBinding && decoration.scope !== 'global-fixed' ? (
+                        <button
+                          type="button"
+                          onClick={() => removeMasterDecoration(selectedMaster.id, decoration.id)}
+                          disabled={decoration.locked || selectedMaster.locked}
+                          className="rounded-full p-2 text-slate-400 transition hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          <TrashIcon className="h-4 w-4" />
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+
+                  {decoration.type === 'text' && !decoration.textBinding ? (
+                    <label className="mb-3 block">
+                      <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">텍스트</span>
+                      <input
+                        type="text"
+                        value={decoration.text || ''}
+                        disabled={selectedMaster.locked || decoration.scope === 'global-fixed' || decoration.locked}
+                        onChange={(event) =>
+                          updateMasterDecoration(selectedMaster.id, decoration.id, { text: event.target.value })
+                        }
+                        className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                      />
+                    </label>
+                  ) : null}
+
+                  {decoration.type === 'image' ? (
+                    <div className="mb-3">
+                      <img
+                        src={document.assets.find((asset) => asset.id === decoration.assetId)?.src}
+                        alt=""
+                        className="h-20 w-full rounded-xl bg-slate-50 object-contain"
+                      />
+                    </div>
+                  ) : null}
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <label className="block">
+                      <span className="mb-1 block text-xs text-slate-400">X</span>
+                      <input
+                        type="number"
+                        value={decoration.x}
+                        disabled={selectedMaster.locked || decoration.scope === 'global-fixed' || decoration.locked}
+                        onChange={(event) =>
+                          updateMasterDecoration(selectedMaster.id, decoration.id, { x: Number(event.target.value) || 0 })
+                        }
+                        className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="mb-1 block text-xs text-slate-400">Y</span>
+                      <input
+                        type="number"
+                        value={decoration.y}
+                        disabled={selectedMaster.locked || decoration.scope === 'global-fixed' || decoration.locked}
+                        onChange={(event) =>
+                          updateMasterDecoration(selectedMaster.id, decoration.id, { y: Number(event.target.value) || 0 })
+                        }
+                        className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="mb-1 block text-xs text-slate-400">Width</span>
+                      <input
+                        type="number"
+                        value={decoration.width}
+                        disabled={selectedMaster.locked || decoration.scope === 'global-fixed' || decoration.locked}
+                        onChange={(event) =>
+                          updateMasterDecoration(selectedMaster.id, decoration.id, { width: Number(event.target.value) || 1 })
+                        }
+                        className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="mb-1 block text-xs text-slate-400">Height</span>
+                      <input
+                        type="number"
+                        value={decoration.height}
+                        disabled={selectedMaster.locked || decoration.scope === 'global-fixed' || decoration.locked}
+                        onChange={(event) =>
+                          updateMasterDecoration(selectedMaster.id, decoration.id, { height: Number(event.target.value) || 1 })
+                        }
+                        className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                      />
+                    </label>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="mt-4 space-y-3">
+              <div className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">텍스트 영역 잠금</div>
+              {editableZones.map((zone) => (
+                <div key={zone.id} className="flex items-center justify-between rounded-2xl bg-white px-4 py-3 text-sm">
+                  <div>
+                    <p className="font-semibold text-slate-800">{zone.name}</p>
+                    <p className="text-xs text-slate-500">
+                      {zone.id} {zone.flowOrder ? `· Flow ${zone.flowOrder}` : ''}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => toggleMasterZoneLock(selectedMaster.id, zone.id)}
+                    disabled={selectedMaster.locked}
+                    className="inline-flex items-center gap-2 rounded-full border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {zone.locked ? <LockClosedIcon className="h-4 w-4" /> : <LockOpenIcon className="h-4 w-4" />}
+                    {zone.locked ? '영역 잠금 해제' : '영역 잠금'}
+                  </button>
+                </div>
+              ))}
+            </div>
+            <label className={`mt-3 flex items-center justify-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 ${selectedMaster.locked ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}`}>
+              <PhotoIcon className="h-4 w-4" />
+              마스터 이미지 업로드
+              <input type="file" accept="image/*" onChange={handleUploadMasterFile} className="hidden" disabled={selectedMaster.locked} />
+            </label>
+            {uploadingMasterImage ? (
+              <p className="mt-3 text-xs text-slate-500">마스터 업로드 중... {Math.round(masterUploadProgress * 100)}%</p>
+            ) : null}
+          </div>
+        ) : null}
+
+        {(selectedDecoration || selectedZoneTemplate) ? (
+          <div className="mb-6 rounded-3xl border border-slate-200 bg-slate-50 p-4">
+            <div className="mb-3 flex items-center justify-between">
+              <div className="text-sm font-semibold text-slate-800">
+                {selectedDecoration ? '선택 장식 속성' : '선택 텍스트 영역 속성'}
+              </div>
+              {selectedDecoration && selectedMaster ? (
+                <button
+                  type="button"
+                  onClick={() => toggleMasterDecorationLock(selectedMaster.id, selectedDecoration.id)}
+                  disabled={selectedDecoration.scope === 'global-fixed' || selectedMaster.locked}
+                  className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {selectedDecoration.locked ? <LockClosedIcon className="h-4 w-4" /> : <LockOpenIcon className="h-4 w-4" />}
+                  {selectedDecoration.locked ? '장식 잠금 해제' : '장식 잠금'}
+                </button>
+              ) : null}
+              {selectedZoneTemplate && selectedMaster ? (
+                <button
+                  type="button"
+                  onClick={() => toggleMasterZoneLock(selectedMaster.id, selectedZoneTemplate.id)}
+                  disabled={selectedZoneTemplate.scope === 'global-fixed' || selectedMaster.locked}
+                  className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {selectedZoneTemplate.locked ? <LockClosedIcon className="h-4 w-4" /> : <LockOpenIcon className="h-4 w-4" />}
+                  {selectedZoneTemplate.locked ? '영역 잠금 해제' : '영역 잠금'}
+                </button>
+              ) : null}
+            </div>
+            <p className="mb-3 text-xs text-slate-500">
+              {selectedDecoration
+                ? `Scope: ${selectedDecoration.scope}${selectedDecoration.locked ? ' · locked' : ''}`
+                : selectedZoneTemplate
+                  ? `Scope: ${selectedZoneTemplate.scope}${selectedZoneTemplate.locked ? ' · locked' : ''}`
+                  : ''}
+            </p>
+
+            {selectedDecoration && selectedMaster ? (
+              <div className="grid grid-cols-2 gap-2">
+                <label className="block">
+                  <span className="mb-1 block text-xs text-slate-400">X</span>
+                  <input
+                    type="number"
+                    value={selectedDecoration.x}
+                    disabled={!selectedDecorationEditable}
+                    onChange={(event) => updateSelectedDecorationFields(selectedDecoration.id, { x: Number(event.target.value) || 0 })}
+                    className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                  />
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-xs text-slate-400">X (mm)</span>
+                  <input
+                    type="number"
+                    step="0.1"
+                    value={pxToMm(selectedDecoration.x, document.layout.pagePreset).toFixed(1)}
+                    disabled={!selectedDecorationEditable}
+                    onChange={(event) => updateSelectedDecorationFields(selectedDecoration.id, { x: mmToPx(Number(event.target.value) || 0, document.layout.pagePreset) })}
+                    className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                  />
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-xs text-slate-400">Y</span>
+                  <input
+                    type="number"
+                    value={selectedDecoration.y}
+                    disabled={!selectedDecorationEditable}
+                    onChange={(event) => updateSelectedDecorationFields(selectedDecoration.id, { y: Number(event.target.value) || 0 })}
+                    className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                  />
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-xs text-slate-400">Y (mm)</span>
+                  <input
+                    type="number"
+                    step="0.1"
+                    value={pxToMm(selectedDecoration.y, document.layout.pagePreset).toFixed(1)}
+                    disabled={!selectedDecorationEditable}
+                    onChange={(event) => updateSelectedDecorationFields(selectedDecoration.id, { y: mmToPx(Number(event.target.value) || 0, document.layout.pagePreset) })}
+                    className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                  />
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-xs text-slate-400">Width</span>
+                  <input
+                    type="number"
+                    value={selectedDecoration.width}
+                    disabled={!selectedDecorationEditable}
+                    onChange={(event) => updateSelectedDecorationFields(selectedDecoration.id, { width: Number(event.target.value) || 1 })}
+                    className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                  />
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-xs text-slate-400">Width (mm)</span>
+                  <input
+                    type="number"
+                    step="0.1"
+                    value={pxToMm(selectedDecoration.width, document.layout.pagePreset).toFixed(1)}
+                    disabled={!selectedDecorationEditable}
+                    onChange={(event) => updateSelectedDecorationFields(selectedDecoration.id, { width: mmToPx(Number(event.target.value) || 0, document.layout.pagePreset) })}
+                    className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                  />
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-xs text-slate-400">Height</span>
+                  <input
+                    type="number"
+                    value={selectedDecoration.height}
+                    disabled={!selectedDecorationEditable}
+                    onChange={(event) => updateSelectedDecorationFields(selectedDecoration.id, { height: Number(event.target.value) || 1 })}
+                    className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                  />
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-xs text-slate-400">Height (mm)</span>
+                  <input
+                    type="number"
+                    step="0.1"
+                    value={pxToMm(selectedDecoration.height, document.layout.pagePreset).toFixed(1)}
+                    disabled={!selectedDecorationEditable}
+                    onChange={(event) => updateSelectedDecorationFields(selectedDecoration.id, { height: mmToPx(Number(event.target.value) || 0, document.layout.pagePreset) })}
+                    className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                  />
+                </label>
+              </div>
+            ) : null}
+
+            {selectedZoneTemplate && selectedMaster ? (
+              <div className="grid grid-cols-2 gap-2">
+                <label className="block">
+                  <span className="mb-1 block text-xs text-slate-400">X</span>
+                  <input
+                    type="number"
+                    value={selectedZoneTemplate.frame.x}
+                    disabled={!selectedZoneEditable}
+                    onChange={(event) => updateMasterZoneFrame(selectedMaster.id, selectedZoneTemplate.id, { x: Number(event.target.value) || 0 })}
+                    className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                  />
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-xs text-slate-400">X (mm)</span>
+                  <input
+                    type="number"
+                    step="0.1"
+                    value={pxToMm(selectedZoneTemplate.frame.x, document.layout.pagePreset).toFixed(1)}
+                    disabled={!selectedZoneEditable}
+                    onChange={(event) => updateMasterZoneFrame(selectedMaster.id, selectedZoneTemplate.id, { x: mmToPx(Number(event.target.value) || 0, document.layout.pagePreset) })}
+                    className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                  />
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-xs text-slate-400">Y</span>
+                  <input
+                    type="number"
+                    value={selectedZoneTemplate.frame.y}
+                    disabled={!selectedZoneEditable}
+                    onChange={(event) => updateMasterZoneFrame(selectedMaster.id, selectedZoneTemplate.id, { y: Number(event.target.value) || 0 })}
+                    className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                  />
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-xs text-slate-400">Y (mm)</span>
+                  <input
+                    type="number"
+                    step="0.1"
+                    value={pxToMm(selectedZoneTemplate.frame.y, document.layout.pagePreset).toFixed(1)}
+                    disabled={!selectedZoneEditable}
+                    onChange={(event) => updateMasterZoneFrame(selectedMaster.id, selectedZoneTemplate.id, { y: mmToPx(Number(event.target.value) || 0, document.layout.pagePreset) })}
+                    className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                  />
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-xs text-slate-400">Width</span>
+                  <input
+                    type="number"
+                    value={selectedZoneTemplate.frame.width}
+                    disabled={!selectedZoneEditable}
+                    onChange={(event) => updateMasterZoneFrame(selectedMaster.id, selectedZoneTemplate.id, { width: Number(event.target.value) || 1 })}
+                    className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                  />
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-xs text-slate-400">Width (mm)</span>
+                  <input
+                    type="number"
+                    step="0.1"
+                    value={pxToMm(selectedZoneTemplate.frame.width, document.layout.pagePreset).toFixed(1)}
+                    disabled={!selectedZoneEditable}
+                    onChange={(event) => updateMasterZoneFrame(selectedMaster.id, selectedZoneTemplate.id, { width: mmToPx(Number(event.target.value) || 0, document.layout.pagePreset) })}
+                    className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                  />
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-xs text-slate-400">Height</span>
+                  <input
+                    type="number"
+                    value={selectedZoneTemplate.frame.height}
+                    disabled={!selectedZoneEditable}
+                    onChange={(event) => updateMasterZoneFrame(selectedMaster.id, selectedZoneTemplate.id, { height: Number(event.target.value) || 1 })}
+                    className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                  />
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-xs text-slate-400">Height (mm)</span>
+                  <input
+                    type="number"
+                    step="0.1"
+                    value={pxToMm(selectedZoneTemplate.frame.height, document.layout.pagePreset).toFixed(1)}
+                    disabled={!selectedZoneEditable}
+                    onChange={(event) => updateMasterZoneFrame(selectedMaster.id, selectedZoneTemplate.id, { height: mmToPx(Number(event.target.value) || 0, document.layout.pagePreset) })}
+                    className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                  />
+                </label>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
+        <div className="space-y-5 overflow-y-auto pb-10">
+          {document.threads.map((thread) => (
+            <section key={thread.id} className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-semibold text-slate-800">{roleLabel[thread.semanticRole]}</p>
+                  <p className="text-xs text-slate-500">{thread.id}</p>
+                </div>
+                <span className="rounded-full bg-white px-3 py-1 text-xs text-slate-500">
+                  {thread.zoneSequence.length} page
+                </span>
+              </div>
+              <div className="mb-3 flex gap-2">
+                <select
+                  value={thread.semanticRole}
+                  onChange={(event) => updateThreadRole(thread.id, event.target.value as TextRole)}
+                  className="flex-1 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none"
+                >
+                  {roleOptions.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  onClick={() => toggleThreadToc(thread.id)}
+                  className={`rounded-full px-4 py-2 text-xs font-semibold ${
+                    thread.ebook.toc.enabled ? 'bg-amber-100 text-amber-800' : 'bg-white text-slate-600'
+                  }`}
+                >
+                  TOC {thread.ebook.toc.enabled ? 'ON' : 'OFF'}
+                </button>
+              </div>
+              <RichTextThreadEditor
+                runs={thread.canonicalText}
+                onChange={(runs) => updateThreadRuns(thread.id, runs)}
+              />
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                <label className="block">
+                  <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Font Size</span>
+                  <input
+                    type="number"
+                    value={thread.styleOverride?.fontSize ?? ''}
+                    placeholder="auto"
+                    onChange={(event) =>
+                      updateThreadStyleOverride(thread.id, {
+                        fontSize: Number(event.target.value) || undefined,
+                      })
+                    }
+                    className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                  />
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Line Height</span>
+                  <input
+                    type="number"
+                    step="0.05"
+                    value={thread.styleOverride?.lineHeight ?? ''}
+                    placeholder="auto"
+                    onChange={(event) =>
+                      updateThreadStyleOverride(thread.id, {
+                        lineHeight: Number(event.target.value) || undefined,
+                      })
+                    }
+                    className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                  />
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Letter Spacing</span>
+                  <input
+                    type="number"
+                    step="0.1"
+                    value={thread.styleOverride?.letterSpacing ?? ''}
+                    placeholder="auto"
+                    onChange={(event) =>
+                      updateThreadStyleOverride(thread.id, {
+                        letterSpacing: Number(event.target.value) || undefined,
+                      })
+                    }
+                    className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                  />
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Color</span>
+                  <input
+                    type="color"
+                    value={thread.styleOverride?.color ?? '#222222'}
+                    onChange={(event) =>
+                      updateThreadStyleOverride(thread.id, {
+                        color: event.target.value,
+                      })
+                    }
+                    className="h-10 w-full rounded-xl border border-slate-200 p-1"
+                  />
+                </label>
+              </div>
+              <p className="mt-2 text-xs text-slate-400">
+                Plain text preview: {getThreadPlainText(document, thread.id).slice(0, 80)}
+              </p>
+            </section>
+          ))}
+        </div>
+      </aside>
+
+      <main className="flex-1 px-8 py-6">
+        <div className="editor-toolbar mb-6 flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.25em] text-slate-500">A4 Publishing Editor</p>
+            <h1 className="mt-2 font-serif text-3xl tracking-tight text-slate-900">{document.meta.title.ko}</h1>
+            <p className="mt-2 text-sm text-slate-500">
+              Revision {history.revision} · Pages {document.pages.length} · {autosave.lastError ? autosave.lastError : autosave.isSaving ? '저장 중' : autosave.lastSavedAt ? '저장 완료' : '편집 중'}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={handleDownloadPdf}
+            className="inline-flex items-center gap-2 rounded-full bg-slate-900 px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-slate-900/15"
+          >
+            <ArrowDownTrayIcon className="h-4 w-4" />
+            PDF 다운로드
+          </button>
+        </div>
+
+        <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_320px]">
+          <section className="space-y-10 overflow-auto rounded-[32px] border border-slate-200 bg-[#ece6da] px-6 py-8">
+            {document.pages.map((page, pageIndex) => (
+              <PublishingPagePreview
+                key={page.id}
+                page={page}
+                pageIndex={pageIndex}
+                templateSelection={templateSelection}
+                setTemplateSelection={setTemplateSelection}
+                mode="interactive"
+                globalFixedManagerMode={globalFixedManagerMode}
+                pageRef={(node) => {
+                  pageRefs.current[page.id] = node;
+                }}
+              />
+            ))}
+          </section>
+
+          <aside className="space-y-4 rounded-[28px] border border-slate-200 bg-white p-5">
+            <div className="flex items-center gap-2 text-sm font-semibold text-slate-700">
+              <ArrowPathIcon className="h-4 w-4" />
+              Core Status
+            </div>
+
+            <div className="rounded-2xl bg-slate-50 p-4 text-sm text-slate-600">
+              <p>Invalidated Threads: {pagination.invalidatedThreadIds.length}</p>
+              <p>Last Paginated: {pagination.lastPaginatedAt || 'not yet'}</p>
+              <p>Last Saved: {autosave.lastSavedAt || 'not yet'}</p>
+              <p>Save State: {autosave.lastError || (autosave.isSaving ? 'saving' : autosave.dirty ? 'dirty' : 'synced')}</p>
+            </div>
+
+            <div className="rounded-2xl bg-slate-50 p-4 text-sm text-slate-600">
+              <p className="mb-3 font-semibold text-slate-800">TOC</p>
+              {document.toc.items.length ? (
+                <div className="space-y-2">
+                  {document.toc.items.map((item) => (
+                    <div key={item.id} className={`rounded-xl bg-white px-3 py-2 ${item.level === 2 ? 'ml-4' : ''}`}>
+                      <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Level {item.level}</p>
+                      <p className="mt-1 text-sm font-medium text-slate-800">{item.label.ko}</p>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p>헤딩을 추가하거나 TOC를 켜면 목차가 생성됩니다.</p>
+              )}
+            </div>
+
+            <div className="rounded-2xl bg-slate-50 p-4 text-sm text-slate-600">
+              <p className="mb-3 font-semibold text-slate-800">선택 요소</p>
+              {selectedBlock ? (
+                <>
+                  <p>ID: {selectedBlock.id}</p>
+                  <p>Type: {selectedBlock.type}</p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (selection.pageId && selection.zoneId && selection.blockId) {
+                        toggleBlockLock(selection.pageId, selection.zoneId, selection.blockId);
+                      }
+                    }}
+                    className="mt-3 inline-flex items-center gap-2 rounded-full border border-slate-200 px-4 py-2"
+                  >
+                    {selectedBlock.locked ? <LockClosedIcon className="h-4 w-4" /> : <LockOpenIcon className="h-4 w-4" />}
+                    {selectedBlock.locked ? '잠금 해제' : '잠금'}
+                  </button>
+
+                  {selectedBlock.type === 'image' && selection.pageId && selection.zoneId ? (
+                    <div className="mt-4 space-y-3">
+                      <div>
+                        <label className="mb-1 block text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Crop X</label>
+                        <input
+                          type="range"
+                          min="0"
+                          max="1"
+                          step="0.01"
+                          value={selectedBlock.crop.originX}
+                          onChange={(event) =>
+                            updateImageBlock(selection.pageId!, selection.zoneId!, selectedBlock.id, {
+                              crop: { ...selectedBlock.crop, originX: Number(event.target.value) },
+                            })
+                          }
+                          className="w-full"
+                        />
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Crop Y</label>
+                        <input
+                          type="range"
+                          min="0"
+                          max="1"
+                          step="0.01"
+                          value={selectedBlock.crop.originY}
+                          onChange={(event) =>
+                            updateImageBlock(selection.pageId!, selection.zoneId!, selectedBlock.id, {
+                              crop: { ...selectedBlock.crop, originY: Number(event.target.value) },
+                            })
+                          }
+                          className="w-full"
+                        />
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Crop Width</label>
+                        <input
+                          type="range"
+                          min="0.2"
+                          max="1"
+                          step="0.01"
+                          value={selectedBlock.crop.width}
+                          onChange={(event) =>
+                            updateImageBlock(selection.pageId!, selection.zoneId!, selectedBlock.id, {
+                              crop: { ...selectedBlock.crop, width: Number(event.target.value) },
+                            })
+                          }
+                          className="w-full"
+                        />
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Crop Height</label>
+                        <input
+                          type="range"
+                          min="0.2"
+                          max="1"
+                          step="0.01"
+                          value={selectedBlock.crop.height}
+                          onChange={(event) =>
+                            updateImageBlock(selection.pageId!, selection.zoneId!, selectedBlock.id, {
+                              crop: { ...selectedBlock.crop, height: Number(event.target.value) },
+                            })
+                          }
+                          className="w-full"
+                        />
+                      </div>
+                    </div>
+                  ) : null}
+                </>
+              ) : (
+                <p>캔버스에서 요소를 선택하세요.</p>
+              )}
+            </div>
+
+            {selectedThread ? (
+              <div className="rounded-2xl bg-slate-50 p-4 text-sm text-slate-600">
+                <p className="mb-3 font-semibold text-slate-800">선택 텍스트 스레드</p>
+                <p>Role: {roleLabel[selectedThread.semanticRole]}</p>
+                <p>TOC: {selectedThread.ebook.toc.enabled ? 'Enabled' : 'Disabled'}</p>
+                <p>Flow Pages: {selectedThread.zoneSequence.length}</p>
+              </div>
+            ) : null}
+
+            <div className="rounded-2xl bg-slate-50 p-4 text-sm text-slate-600">
+              <p className="mb-3 font-semibold text-slate-800">Publication</p>
+              <p>ID: {publicationId}</p>
+              <p>Preset: {document.layout.pagePreset.key}</p>
+              <p>Master Count: {document.masters.items.length}</p>
+              <p>Template Selection: {templateSelection.type ? `${templateSelection.type}:${templateSelection.id}` : 'none'}</p>
+              <p>A4 Width: {formatMm(document.layout.pagePreset.widthMm)}</p>
+              <p>A4 Height: {formatMm(document.layout.pagePreset.heightMm)}</p>
+            </div>
+
+            <div className="rounded-2xl bg-slate-50 p-4 text-sm text-slate-600">
+              <p className="mb-3 font-semibold text-slate-800">정렬 검증</p>
+              <p>Top Left: 0 px / 0 mm</p>
+              <p>Top Center: {validationMarkers.topCenter.x.toFixed(1)} px / {formatMm(pxToMm(validationMarkers.topCenter.x, document.layout.pagePreset))}</p>
+              <p>Top Right: {validationMarkers.topRight.x.toFixed(1)} px / {formatMm(pxToMm(validationMarkers.topRight.x, document.layout.pagePreset))}</p>
+              <p>Bottom Center Y: {validationMarkers.bottomCenter.y.toFixed(1)} px / {formatMm(pxToMm(validationMarkers.bottomCenter.y, document.layout.pagePreset))}</p>
+              {validationReport ? (
+                <div className="mt-3 space-y-2 rounded-xl bg-white px-3 py-3 text-xs text-slate-500">
+                  <p className="font-semibold text-slate-700">편집기 vs PDF 오차</p>
+                  <p>
+                    Page Width Delta: {validationReport.pageSizeDeltaPx.width.toFixed(3)} px /{' '}
+                    {formatMm(pxToMm(validationReport.pageSizeDeltaPx.width, document.layout.pagePreset))}
+                  </p>
+                  <p>
+                    Page Height Delta: {validationReport.pageSizeDeltaPx.height.toFixed(3)} px /{' '}
+                    {formatMm(pxToMm(validationReport.pageSizeDeltaPx.height, document.layout.pagePreset))}
+                  </p>
+                  {Object.entries(validationReport.markerDeltaPx).map(([key, delta]) => (
+                    <p key={key}>
+                      {key}: x {delta.x.toFixed(3)} px / {formatMm(pxToMm(delta.x, document.layout.pagePreset))}, y {delta.y.toFixed(3)} px /{' '}
+                      {formatMm(pxToMm(delta.y, document.layout.pagePreset))}
+                    </p>
+                  ))}
+                </div>
+              ) : (
+                <p className="mt-3 text-xs text-slate-400">검증 마커를 켜고 페이지가 렌더되면 편집기와 PDF 루트의 좌표 차이가 표시됩니다.</p>
+              )}
+            </div>
+
+            <div className="rounded-2xl bg-slate-50 p-4 text-sm text-slate-600">
+              <p className="mb-3 font-semibold text-slate-800">출력 점검</p>
+              {preflightIssues.length ? (
+                <div className="space-y-2">
+                  {preflightIssues.map((issue) => (
+                    <button
+                      key={issue.id}
+                      type="button"
+                      onClick={() => jumpToIssue(issue)}
+                      className={`block w-full rounded-xl px-3 py-2 text-left text-xs ${
+                        issue.severity === 'error' ? 'bg-rose-50 text-rose-800' : 'bg-amber-50 text-amber-800'
+                      }`}
+                    >
+                      <span className="mr-2 font-semibold uppercase">{issue.severity}</span>
+                      {issue.message}
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <p className="rounded-xl bg-emerald-50 px-3 py-2 text-xs text-emerald-700">이상 없음</p>
+              )}
+            </div>
+          </aside>
+        </div>
+      </main>
+
+      <div ref={measurementRootRef} aria-hidden="true" />
+      {showCreateMasterModal ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 px-4">
+          <div className="w-full max-w-3xl rounded-[28px] bg-white p-6 shadow-2xl">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Master Builder</p>
+                <h2 className="mt-2 text-2xl font-semibold text-slate-900">새 마스터 생성</h2>
+                <p className="mt-2 text-sm text-slate-500">이름과 프리셋 선택</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowCreateMasterModal(false)}
+                className="rounded-full border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-600"
+              >
+                닫기
+              </button>
+            </div>
+
+            <label className="mt-5 block">
+              <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">마스터 이름</span>
+              <input
+                value={newMasterName}
+                onChange={(event) => setNewMasterName(event.target.value)}
+                placeholder="예: 발표집 2단 기본형"
+                className="w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm"
+              />
+            </label>
+
+            <div className="mt-5">
+              <p className="mb-3 text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">프리셋</p>
+              <div className="grid gap-3 sm:grid-cols-2">
+                {(Object.keys(TEMPLATE_PRESET_LABELS) as TemplatePresetKey[]).map((preset) => (
+                  <button
+                    key={preset}
+                    type="button"
+                    onClick={() => setNewMasterPreset(preset)}
+                    className={`rounded-[24px] border px-4 py-4 text-left transition ${
+                      newMasterPreset === preset
+                        ? 'border-slate-900 bg-slate-900 text-white'
+                        : 'border-slate-200 bg-slate-50 text-slate-700 hover:border-slate-400'
+                    }`}
+                  >
+                    <p className="text-sm font-semibold">{TEMPLATE_PRESET_LABELS[preset]}</p>
+                    <p className={`mt-2 text-xs ${newMasterPreset === preset ? 'text-slate-200' : 'text-slate-500'}`}>
+                      {TEMPLATE_PRESET_DESCRIPTIONS[preset]}
+                    </p>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="mt-6 flex justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setShowCreateMasterModal(false)}
+                className="rounded-full border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700"
+              >
+                취소
+              </button>
+              <button
+                type="button"
+                onClick={handleCreateMaster}
+                className="rounded-full bg-slate-900 px-5 py-2 text-sm font-semibold text-white"
+              >
+                생성
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {showPreflightModal ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 px-4">
+          <div className="w-full max-w-2xl rounded-[28px] bg-white p-6 shadow-2xl">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Preflight</p>
+                <h2 className="mt-2 text-2xl font-semibold text-slate-900">PDF 점검</h2>
+                <p className="mt-2 text-sm text-slate-500">항목 확인 후 다운로드</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowPreflightModal(false)}
+                className="rounded-full border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-600"
+              >
+                닫기
+              </button>
+            </div>
+
+            <div className="mt-5 grid gap-3">
+              {preflightIssues.map((issue) => (
+                <button
+                  key={issue.id}
+                  type="button"
+                  onClick={() => {
+                    jumpToIssue(issue);
+                    setShowPreflightModal(false);
+                  }}
+                  className={`rounded-2xl px-4 py-3 text-left ${
+                    issue.severity === 'error' ? 'bg-rose-50 text-rose-900' : 'bg-amber-50 text-amber-900'
+                  }`}
+                >
+                  <p className="text-xs font-semibold uppercase tracking-[0.15em]">
+                    {issue.severity} {issue.pageId ? `· ${issue.pageId}` : ''}
+                  </p>
+                  <p className="mt-1 text-sm">{issue.message}</p>
+                </button>
+              ))}
+            </div>
+
+            <div className="mt-6 flex justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setShowPreflightModal(false)}
+                className="rounded-full border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700"
+              >
+                나중에
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmPdfDownload}
+                className="rounded-full bg-slate-900 px-5 py-2 text-sm font-semibold text-white"
+              >
+                그래도 PDF 다운로드
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      <div className="pointer-events-none absolute left-[-99999px] top-0 opacity-0">
+        {document.pages.map((page, pageIndex) => (
+          <PublishingPagePreview
+            key={`pdf-${page.id}`}
+            page={page}
+            pageIndex={pageIndex}
+            templateSelection={{ type: null, id: null }}
+            setTemplateSelection={() => undefined}
+            mode="export"
+            globalFixedManagerMode={false}
+            pageRef={(node) => {
+              pdfPageRefs.current[page.id] = node;
+            }}
+          />
+        ))}
+      </div>
+    </div>
+  );
+};
+
+export default PublishingEditorShell;
