@@ -7,10 +7,10 @@ import { usePublishingStore } from '@/stores/publishingStore';
 import { showToast } from '@/components/common/Toast';
 import { logError } from '@/utils/errorHandler';
 
-const PublishingEditorShell = lazy(() => import('@/components/publishing/PublishingEditorShell'));
+const MasterStudioShell = lazy(() => import('@/components/publishing/MasterStudioShell'));
 const getDraftKey = (publicationId: string) => `publishing-draft:${publicationId}`;
 
-const EditorPage: React.FC = () => {
+const MasterStudioPage: React.FC = () => {
   const { publicationId } = useParams<{ publicationId: string }>();
   const { user, role, loading: authLoading } = useAuth();
   const initialize = usePublishingStore((state) => state.initialize);
@@ -35,17 +35,17 @@ const EditorPage: React.FC = () => {
         initialize(document);
         window.localStorage.removeItem(getDraftKey(publicationId));
       } catch (error) {
-        logError(error, 'PublishingEditor-load');
+        logError(error, 'MasterStudio-load');
         const rawDraft = window.localStorage.getItem(getDraftKey(publicationId));
         if (rawDraft) {
           try {
             initialize(JSON.parse(rawDraft));
             showToast('로컬 초안 복원', 'success');
           } catch {
-            showToast('간행물 편집 상태를 불러오지 못했습니다.', 'error');
+            showToast('마스터 상태를 불러오지 못했습니다.', 'error');
           }
         } else {
-          showToast('간행물 편집 상태를 불러오지 못했습니다.', 'error');
+          showToast('마스터 상태를 불러오지 못했습니다.', 'error');
         }
       } finally {
         setLoading(false);
@@ -72,9 +72,9 @@ const EditorPage: React.FC = () => {
           markSaved();
         })
         .catch((error) => {
-          logError(error, 'PublishingEditor-save');
+          logError(error, 'MasterStudio-save');
           markSaveFailed('저장 실패');
-          showToast('간행물 저장에 실패했습니다.', 'error');
+          showToast('마스터 저장에 실패했습니다.', 'error');
         });
     }, 1500);
 
@@ -94,7 +94,7 @@ const EditorPage: React.FC = () => {
       <div className="flex min-h-screen items-center justify-center bg-[#f3efe7]">
         <div className="text-center">
           <div className="mx-auto h-12 w-12 animate-spin rounded-full border-b-2 border-slate-900" />
-          <p className="mt-4 text-sm text-slate-500">A4 편집 상태를 불러오는 중...</p>
+          <p className="mt-4 text-sm text-slate-500">마스터 스튜디오를 불러오는 중...</p>
         </div>
       </div>
     );
@@ -107,15 +107,15 @@ const EditorPage: React.FC = () => {
           <div className="flex min-h-screen items-center justify-center bg-[#f3efe7]">
             <div className="text-center">
               <div className="mx-auto h-12 w-12 animate-spin rounded-full border-b-2 border-slate-900" />
-              <p className="mt-4 text-sm text-slate-500">에디터 쉘을 준비하는 중...</p>
+              <p className="mt-4 text-sm text-slate-500">스튜디오를 준비하는 중...</p>
             </div>
           </div>
         }
       >
-        <PublishingEditorShell publicationId={publicationId} />
+        <MasterStudioShell publicationId={publicationId} />
       </Suspense>
     </ProtectedRoute>
   );
 };
 
-export default EditorPage;
+export default MasterStudioPage;

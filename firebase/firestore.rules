@@ -23,6 +23,18 @@ service cloud.firestore {
       allow read: if true;
       allow write: if isAdmin();
 
+      match /editor/{documentId} {
+        allow read, write: if isAdmin();
+      }
+
+      match /editorPages/{pageId} {
+        allow read, write: if isAdmin();
+      }
+
+      match /editorAssets/{assetId} {
+        allow read, write: if isAdmin();
+      }
+
       match /articles/{articleId} {
         allow read: if true;
         allow write: if isAdmin();

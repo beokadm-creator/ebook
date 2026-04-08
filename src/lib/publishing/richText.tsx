@@ -59,6 +59,19 @@ export const textRunsToHtml = (runs: TextRun[]) =>
     })
     .join('');
 
+export const runsToMeasurementHtml = (runs: TextRun[]) =>
+  runs
+    .map((run) => {
+      const styles: string[] = [];
+      if (run.marks?.bold) styles.push('font-weight:700');
+      if (run.marks?.italic) styles.push('font-style:italic');
+      if (run.marks?.underline) styles.push('text-decoration:underline');
+      const styleAttr = styles.length ? ` style="${styles.join(';')}"` : '';
+      let content = escapeHtml(run.text).replace(/\n/g, '<br>');
+      return styles.length ? `<span${styleAttr}>${content}</span>` : content;
+    })
+    .join('');
+
 const extractRunsFromNode = (node: Node, inherited: TextMarkSet = {}): TextRun[] => {
   if (node.nodeType === Node.TEXT_NODE) {
     return node.textContent ? [{ text: node.textContent, marks: inherited }] : [];

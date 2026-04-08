@@ -1,7 +1,6 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tsconfigPaths from "vite-tsconfig-paths";
-import { traeBadgePlugin } from 'vite-plugin-trae-solo-badge';
 import { VitePWA } from 'vite-plugin-pwa';
 
 // https://vite.dev/config/
@@ -14,19 +13,6 @@ export default defineConfig(({ command }) => ({
         ],
       },
     }),
-    ...(command === 'serve'
-      ? [
-          traeBadgePlugin({
-            variant: 'dark',
-            position: 'bottom-right',
-            prodOnly: false,
-            clickable: true,
-            clickUrl: 'https://www.trae.ai/solo?showJoin=1',
-            autoTheme: true,
-            autoThemeTarget: '#root'
-          }),
-        ]
-      : []),
     tsconfigPaths(),
     VitePWA({
       registerType: 'autoUpdate',
@@ -102,20 +88,6 @@ export default defineConfig(({ command }) => ({
                 statuses: [0, 200]
               },
               rangeRequests: true
-            }
-          },
-          {
-            urlPattern: /^https:\/\/coresg-normal\.trae\.ai\/.*/i,
-            handler: 'StaleWhileRevalidate',
-            options: {
-              cacheName: 'image-cache',
-              expiration: {
-                maxEntries: 50,
-                maxAgeSeconds: 60 * 60 * 24 * 7 // 1 week
-              },
-              cacheableResponse: {
-                statuses: [0, 200]
-              }
             }
           },
           {

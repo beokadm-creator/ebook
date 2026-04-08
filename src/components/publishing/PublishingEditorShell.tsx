@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowDownTrayIcon,
-  ArrowPathIcon,
   LockClosedIcon,
   LockOpenIcon,
   PhotoIcon,
@@ -9,17 +8,16 @@ import {
   TrashIcon,
 } from '@heroicons/react/24/outline';
 import { uploadPublicationImage } from '@/lib/publishing/assets';
-import { formatMm, getPxPerMm, mmToPx, pxToMm } from '@/lib/publishing/a4';
+import { formatMm, getPxPerMm, pxToMm } from '@/lib/publishing/a4';
 import { getThreadPlainText } from '@/lib/publishing/defaultDocument';
+import { parseDocxManuscript } from '@/lib/publishing/docxImport';
 import { paginateThreadWithDom } from '@/lib/publishing/domPagination';
 import { downloadPagesAsPdf } from '@/lib/publishing/pdf';
-import { getRecommendedPreset } from '@/lib/publishing/recommendations';
 import { TEMPLATE_PRESET_DESCRIPTIONS, TEMPLATE_PRESET_LABELS, TemplatePresetKey } from '@/lib/publishing/templatePresets';
-import RichTextThreadEditor from '@/components/publishing/RichTextThreadEditor';
 import { renderRunsToReact } from '@/lib/publishing/richText';
 import { showToast } from '@/components/common/Toast';
 import { usePublishingStore } from '@/stores/publishingStore';
-import { ElementScope, MasterTemplate, PageBlock, PublicationPage, TextRole } from '@/types/publishing';
+import { ElementScope, MasterTemplate, PageBlock, PublicationPage, PublishingDocument, TextRole, ZoneKind } from '@/types/publishing';
 import { logError } from '@/utils/errorHandler';
 
 interface PublishingEditorShellProps {
@@ -79,6 +77,9 @@ const TextBlockView: React.FC<{
 }> = ({ block, zoneStyle }) => (
   <div
     style={{
+      display: 'block',
+      width: '100%',
+      maxWidth: '100%',
       fontFamily: zoneStyle.fontFamily,
       fontSize: block.styleOverride?.fontSize ?? zoneStyle.fontSize,
       fontWeight: block.styleOverride?.fontWeight ?? zoneStyle.fontWeight,
@@ -88,6 +89,8 @@ const TextBlockView: React.FC<{
       textAlign: block.styleOverride?.textAlign ?? zoneStyle.textAlign,
       whiteSpace: 'pre-wrap',
       wordBreak: 'break-word',
+      overflowWrap: 'anywhere',
+      hyphens: 'auto',
     }}
   >
     {renderRunsToReact(block.content.runs)}
@@ -95,6 +98,46 @@ const TextBlockView: React.FC<{
 );
 
 const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
+
+const getChainRootPageId = (document: PublishingDocument, pageId: string) => {
+  let currentPage = document.pages.find((page) => page.id === pageId);
+  while (currentPage?.derivedFrom?.reason === 'auto-pagination') {
+    const previousPage = document.pages.find((page) => page.id === currentPage?.derivedFrom?.previousPageId);
+    if (!previousPage) {
+      break;
+    }
+    currentPage = previousPage;
+  }
+  return currentPage?.id ?? pageId;
+};
+
+const inferZoneSlotKey = (zone?: MasterTemplate['contentZones'][number]) => {
+  if (!zone) {
+    return undefined;
+  }
+
+  if (zone.slotKey?.trim()) {
+    return zone.slotKey.trim();
+  }
+
+  const target = `${zone.id} ${zone.name}`.toLowerCase();
+  if (target.includes('image')) return 'image';
+  if (target.includes('cover') || target.includes('title')) return 'title';
+  if (target.includes('section') && target.includes('header')) return 'section_title';
+  if (target.includes('intro') || target.includes('summary')) return 'summary';
+  return zone.kind === 'text-flow' ? 'body' : undefined;
+};
+
+const getSlotIdentity = (zone: MasterTemplate['contentZones'][number]) => inferZoneSlotKey(zone) || zone.flowGroupId || zone.id;
+
+const getDefaultRoleForZone = (zone?: MasterTemplate['contentZones'][number]): TextRole => {
+  const slot = `${inferZoneSlotKey(zone) ?? ''} ${zone?.name ?? ''}`.toLowerCase();
+  if (slot.includes('section_title')) return 'heading';
+  if (slot.includes('title')) return 'title';
+  if (slot.includes('subtitle')) return 'subtitle';
+  if (slot.includes('caption')) return 'caption';
+  return 'paragraph';
+};
 
 const getMaxValidationDeltaPx = (report: ValidationReport | null) => {
   if (!report) {
@@ -240,7 +283,7 @@ const ImageBlockView: React.FC<{
   );
 };
 
-const PublishingPagePreview: React.FC<{
+export const PublishingPagePreview: React.FC<{
   page: PublicationPage;
   pageIndex: number;
   pageRef: (node: HTMLDivElement | null) => void;
@@ -248,9 +291,14 @@ const PublishingPagePreview: React.FC<{
   setTemplateSelection: React.Dispatch<React.SetStateAction<TemplateSelection>>;
   mode: RenderMode;
   globalFixedManagerMode: boolean;
-}> = ({ page, pageIndex, pageRef, templateSelection, setTemplateSelection, mode, globalFixedManagerMode }) => {
+  onTextBlockOpen: (threadId: string) => void;
+  onZoneActivate?: (zoneId: string, kind: ZoneKind) => void;
+  enableTemplateEditing?: boolean;
+  allowPageSelection?: boolean;
+}> = ({ page, pageIndex, pageRef, templateSelection, setTemplateSelection, mode, globalFixedManagerMode, onTextBlockOpen, onZoneActivate, enableTemplateEditing = true, allowPageSelection = true }) => {
   const {
     document,
+    selectPage,
     selectBlock,
     selection,
     updateImageBlock,
@@ -342,7 +390,7 @@ const PublishingPagePreview: React.FC<{
   };
 
   const canEditDecoration = (scope: ElementScope, locked: boolean) =>
-    mode === 'interactive' && !locked && (scope !== 'global-fixed' ? !master.locked : globalFixedManagerMode);
+    enableTemplateEditing && mode === 'interactive' && !locked && (scope !== 'global-fixed' ? !master.locked : globalFixedManagerMode);
 
   const snapHorizontal = (x: number, width: number) => {
     const candidates = [
@@ -430,6 +478,11 @@ const PublishingPagePreview: React.FC<{
         ref={pageRef}
         className={`pdf-page relative overflow-hidden bg-white ${mode === 'interactive' ? 'rounded-[24px] border border-gray-300 shadow-[0_30px_90px_rgba(15,23,42,0.12)]' : ''}`}
         style={{ width: pageSize.widthPx, height: pageSize.heightPx }}
+        onClick={() => {
+          if (mode === 'interactive' && allowPageSelection) {
+            selectPage(page.id);
+          }
+        }}
       >
         <div className="absolute inset-0" style={{ background: master.background.fill }} />
         {printGuides.showValidationMarks ? (
@@ -596,9 +649,9 @@ const PublishingPagePreview: React.FC<{
           )
         ))}
 
-        {page.zones.map((zoneInstance) => {
-          const zoneTemplate = master.contentZones.find((item) => item.id === zoneInstance.zoneId);
-          if (!zoneTemplate) {
+        {master.contentZones.map((zoneTemplate) => {
+          const zoneInstance = page.zones.find((item) => item.zoneId === zoneTemplate.id) ?? { zoneId: zoneTemplate.id, blocks: [] };
+          if (!zoneTemplate?.frame) {
             return null;
           }
 
@@ -611,13 +664,19 @@ const PublishingPagePreview: React.FC<{
                 top: zoneTemplate.frame.y,
                 width: zoneTemplate.frame.width,
                 height: zoneTemplate.frame.height,
+                overflow: 'hidden',
                 paddingTop: zoneTemplate.constraints.padding.top,
                 paddingRight: zoneTemplate.constraints.padding.right,
                 paddingBottom: zoneTemplate.constraints.padding.bottom,
                 paddingLeft: zoneTemplate.constraints.padding.left,
               }}
+              onClick={() => {
+                if (mode === 'interactive' && !enableTemplateEditing) {
+                  onZoneActivate?.(zoneInstance.zoneId, zoneTemplate.kind);
+                }
+              }}
             >
-              {mode === 'interactive' ? <div
+              {mode === 'interactive' && enableTemplateEditing ? <div
                 data-html2canvas-ignore="true"
                 className={`absolute left-2 top-2 z-20 rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.15em] text-white/85 ${templateSelection.type === 'zone' && templateSelection.id === zoneTemplate.id ? 'bg-sky-600' : 'bg-slate-900'}`}
                 onPointerDown={(event) => {
@@ -640,7 +699,7 @@ const PublishingPagePreview: React.FC<{
                 {zoneTemplate.name}
                 {zoneTemplate.flowOrder ? ` · Flow ${zoneTemplate.flowOrder}` : ''}
               </div> : null}
-              {mode === 'interactive' && !master.locked && zoneTemplate.scope !== 'global-fixed' && !zoneTemplate.locked ? <div
+              {mode === 'interactive' && enableTemplateEditing && !master.locked && zoneTemplate.scope !== 'global-fixed' && !zoneTemplate.locked ? <div
                 data-html2canvas-ignore="true"
                 className={`editor-handle absolute bottom-[-10px] right-[-10px] h-5 w-5 rounded-full border-2 border-white shadow ${templateSelection.type === 'zone' && templateSelection.id === zoneTemplate.id ? 'bg-sky-600' : 'bg-slate-900'}`}
                 onPointerDown={(event) => {
@@ -662,7 +721,9 @@ const PublishingPagePreview: React.FC<{
                       key={block.id}
                       block={block}
                       selected={isSelected}
-                      onSelect={() => selectBlock(page.id, zoneInstance.zoneId, block.id)}
+                      onSelect={() => {
+                        selectBlock(page.id, zoneInstance.zoneId, block.id);
+                      }}
                       onMove={(deltaX, deltaY) =>
                         updateImageBlock(page.id, zoneInstance.zoneId, block.id, {
                           placement: {
@@ -688,8 +749,16 @@ const PublishingPagePreview: React.FC<{
                 return (
                   <div
                     key={block.id}
-                    onClick={() => selectBlock(page.id, zoneInstance.zoneId, block.id)}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      selectBlock(page.id, zoneInstance.zoneId, block.id);
+                      onTextBlockOpen(block.flow.sourceThreadId);
+                    }}
                     className={`cursor-text rounded-md transition ${isSelected ? 'editor-selection-ring ring-2 ring-amber-400 ring-offset-2' : ''}`}
+                    style={{
+                      maxWidth: '100%',
+                      overflow: 'hidden',
+                    }}
                   >
                     <TextBlockView block={block} zoneStyle={zoneTemplate.style} />
                   </div>
@@ -704,6 +773,7 @@ const PublishingPagePreview: React.FC<{
 };
 
 const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicationId }) => {
+  const domDocument = window.document;
   const {
     document,
     selection,
@@ -711,13 +781,14 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
     autosave,
     pagination,
     selectPage,
+    addPage,
+    deletePage,
     createMaster,
     duplicateMaster,
     deleteMaster,
     setDefaultMaster,
     renameMaster,
     updatePageMaster,
-    applyTemplatePreset,
     updateDocumentMeta,
     updatePageNumbering,
     updatePrintGuides,
@@ -725,17 +796,16 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
     toggleMasterLock,
     updateMasterDecoration,
     updateGlobalMasterDecoration,
-    updateMasterZoneFrame,
     addMasterTextDecoration,
     addMasterImageDecoration,
     removeMasterDecoration,
     toggleMasterDecorationLock,
     toggleMasterZoneLock,
-    updateThreadRuns,
+    updateThreadText,
     updateThreadRole,
-    updateThreadStyleOverride,
     toggleThreadToc,
-    addThread,
+    deleteThread,
+    addThreadWithText,
     addImageBlock,
     updateImageBlock,
     toggleBlockLock,
@@ -757,6 +827,15 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
   const [newMasterPreset, setNewMasterPreset] = useState<TemplatePresetKey>('single-column');
   const [showCreateMasterModal, setShowCreateMasterModal] = useState(false);
   const [activeMasterId, setActiveMasterId] = useState<string | null>(null);
+  const [showTextModal, setShowTextModal] = useState(false);
+  const [textModalThreadId, setTextModalThreadId] = useState<string | null>(null);
+  const [textModalZoneId, setTextModalZoneId] = useState<string | null>(null);
+  const [textModalValue, setTextModalValue] = useState('');
+  const [showImageModal, setShowImageModal] = useState(false);
+  const [imageModalZoneId, setImageModalZoneId] = useState<string | null>(null);
+  const [activeContentZoneId, setActiveContentZoneId] = useState<string | null>(null);
+  const [pageJumpInput, setPageJumpInput] = useState('');
+  const [importingDocx, setImportingDocx] = useState(false);
   const pageRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const pdfPageRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const measurementRootRef = useRef<HTMLDivElement | null>(null);
@@ -766,24 +845,45 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
       return;
     }
 
-    pagination.invalidatedThreadIds.forEach((threadId) => {
-      const segments = paginateThreadWithDom(document, threadId, measurementRootRef.current!);
-      if (segments.length) {
-        applyPaginationResult(threadId, segments);
-      }
-    });
+    const measure = () => {
+      pagination.invalidatedThreadIds.forEach((threadId) => {
+        try {
+          const segments = paginateThreadWithDom(document, threadId, measurementRootRef.current!);
+          if (segments.length) {
+            applyPaginationResult(threadId, segments);
+          }
+        } catch (error) {
+          logError(error, `PublishingEditor-pagination:${threadId}`);
+        }
+      });
+    };
+
+    domDocument.fonts.ready.then(measure);
   }, [applyPaginationResult, document, pagination.invalidatedThreadIds]);
 
   const selectedPage = document.pages.find((item) => item.id === selection.pageId) ?? document.pages[1] ?? document.pages[0];
   const pageMaster = document.masters.items.find((item) => item.id === selectedPage?.masterId) ?? document.masters.items[0];
   const selectedMaster = document.masters.items.find((item) => item.id === activeMasterId) ?? pageMaster ?? document.masters.items[0];
   const selectedZoneId =
-    (selection.zoneId && pageMaster?.contentZones.some((zone) => zone.id === selection.zoneId) ? selection.zoneId : undefined)
+    (activeContentZoneId && pageMaster?.contentZones.some((zone) => zone.id === activeContentZoneId) ? activeContentZoneId : undefined)
+    ?? (selection.zoneId && pageMaster?.contentZones.some((zone) => zone.id === selection.zoneId) ? selection.zoneId : undefined)
     ?? pageMaster?.contentZones
       .filter((zone) => zone.kind === 'text-flow')
       .sort((left, right) => (left.flowOrder ?? 0) - (right.flowOrder ?? 0))[0]?.id
     ?? selectedPage?.zones[0]?.zoneId
     ?? 'body_main';
+  const primaryPageZoneId =
+    pageMaster?.contentZones
+      .filter((zone) => zone.kind === 'text-flow')
+      .sort((left, right) => (left.flowOrder ?? 0) - (right.flowOrder ?? 0))[0]?.id
+    ?? selectedZoneId;
+  const primaryImageZoneId =
+    (selection.zoneId && pageMaster?.contentZones.some((zone) => zone.id === selection.zoneId && zone.kind !== 'text-flow') ? selection.zoneId : undefined)
+    ?? pageMaster?.contentZones.find((zone) => zone.kind === 'media-freeform' || zone.kind === 'mixed')?.id
+    ?? selectedPage?.zones.find((zone) =>
+      pageMaster?.contentZones.some((template) => template.id === zone.zoneId && template.kind !== 'text-flow'),
+    )?.zoneId
+    ?? selectedZoneId;
 
   useEffect(() => {
     if (!activeMasterId && pageMaster?.id) {
@@ -806,50 +906,253 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
     setNewMasterPreset('single-column');
     setShowCreateMasterModal(false);
   };
-  const selectedThread = useMemo(() => {
-    if (!selection.blockId) {
+  const openTextModalForCreate = (zoneId?: string | null) => {
+    const resolvedZoneId = zoneId ?? selectedZoneId;
+    if (!selectedPage || !resolvedZoneId) {
+      showToast('영역을 먼저 선택하세요.', 'error');
+      return;
+    }
+
+    setTextModalThreadId(null);
+    setTextModalZoneId(resolvedZoneId);
+    setTextModalValue('');
+    setShowTextModal(true);
+  };
+
+  const openTextModalForEdit = (threadId: string) => {
+    const thread = document.threads.find((item) => item.id === threadId);
+    if (!thread) {
+      return;
+    }
+
+    setTextModalThreadId(threadId);
+    setTextModalZoneId(thread.sourceZoneId);
+    setTextModalValue(getThreadPlainText(document, threadId));
+    setShowTextModal(true);
+  };
+
+  const handleCanvasTextOpen = (threadId: string) => {
+    openTextModalForEdit(threadId);
+  };
+
+  const findImportTargetZone = useCallback((slotKey: string) => {
+    if (!selectedPage) {
       return null;
     }
 
-    for (const thread of document.threads) {
-      const match = document.pages.some((page) =>
-        page.zones.some((zone) =>
-          zone.blocks.some(
-            (block) => block.type === 'text' && block.id === selection.blockId && block.flow.sourceThreadId === thread.id,
-          ),
-        ),
-      );
-      if (match) {
-        return thread;
-      }
+    const rootPageId = getChainRootPageId(document, selectedPage.id);
+    const rootPage = document.pages.find((page) => page.id === rootPageId) ?? selectedPage;
+    const rootMaster = document.masters.items.find((item) => item.id === rootPage.masterId) ?? pageMaster;
+    if (!rootMaster) {
+      return null;
     }
-    return null;
-  }, [document.pages, document.threads, selection.blockId]);
 
+    const normalizedSlotKey = slotKey.toLowerCase();
+    const baseSlotKey = normalizedSlotKey.replace(/_(ko|en)$/, '');
+
+    return (
+      rootMaster.contentZones.find((zone) => zone.kind === 'text-flow' && inferZoneSlotKey(zone)?.toLowerCase() === normalizedSlotKey)
+      ?? rootMaster.contentZones.find((zone) => zone.kind === 'text-flow' && inferZoneSlotKey(zone)?.toLowerCase() === baseSlotKey)
+      ?? rootMaster.contentZones.find((zone) => zone.kind === 'text-flow' && zone.name.toLowerCase().includes(baseSlotKey))
+      ?? rootMaster.contentZones.find((zone) => zone.kind === 'text-flow' && inferZoneSlotKey(zone)?.toLowerCase() === 'body')
+      ?? rootMaster.contentZones.find((zone) => zone.kind === 'text-flow')
+      ?? null
+    );
+  }, [document, pageMaster, selectedPage]);
+
+  const findThreadForZoneSlot = useCallback((zoneId: string) => {
+    if (!selectedPage || !pageMaster) {
+      return null;
+    }
+
+    const zoneTemplate =
+      pageMaster.contentZones.find((zone) => zone.id === zoneId)
+      ?? pageMaster.contentZones.find((zone) => zone.id === selectedZoneId);
+    if (!zoneTemplate) {
+      return null;
+    }
+
+    const rootPageId = getChainRootPageId(document, selectedPage.id);
+    const inferredSlotKey = inferZoneSlotKey(zoneTemplate);
+    const slotKey = inferredSlotKey ? `slot:${inferredSlotKey}` : zoneTemplate.flowGroupId ? `group:${zoneTemplate.flowGroupId}` : `zone:${zoneTemplate.id}`;
+
+    return document.threads.find((thread) => {
+      if (thread.semanticRole !== 'paragraph') {
+        return false;
+      }
+
+      const threadPage = document.pages.find((page) => page.id === thread.sourcePageId);
+      if (!threadPage) {
+        return false;
+      }
+
+      const threadRootPageId = getChainRootPageId(document, thread.sourcePageId);
+      if (threadRootPageId !== rootPageId) {
+        return false;
+      }
+
+      const threadMaster = document.masters.items.find((item) => item.id === threadPage.masterId);
+      const threadZone = threadMaster?.contentZones.find((item) => item.id === thread.sourceZoneId);
+      const threadInferredSlotKey = inferZoneSlotKey(threadZone);
+      const threadSlotKey = threadInferredSlotKey ? `slot:${threadInferredSlotKey}` : threadZone?.flowGroupId ? `group:${threadZone.flowGroupId}` : `zone:${thread.sourceZoneId}`;
+      return threadSlotKey === slotKey;
+    }) ?? null;
+  }, [document, pageMaster, selectedPage, selectedZoneId]);
+
+  const handleZoneActivate = (zoneId: string, kind: ZoneKind) => {
+    setActiveContentZoneId(zoneId);
+    const zone = selectedPage?.zones.find((item) => item.zoneId === zoneId);
+    if (kind === 'text-flow') {
+      const slotThread = findThreadForZoneSlot(zoneId);
+      if (slotThread) {
+        openTextModalForEdit(slotThread.id);
+        return;
+      }
+
+      const existingTextBlock = zone?.blocks.find((block): block is Extract<PageBlock, { type: 'text' }> => block.type === 'text');
+      if (existingTextBlock) {
+        openTextModalForEdit(existingTextBlock.flow.sourceThreadId);
+        return;
+      }
+      openTextModalForCreate(zoneId);
+      return;
+    }
+
+    const existingImageBlock = zone?.blocks.find((block): block is Extract<PageBlock, { type: 'image' }> => block.type === 'image');
+    if (existingImageBlock && selectedPage) {
+      selectBlockInStore(selectedPage.id, zoneId, existingImageBlock.id);
+      return;
+    }
+    setImageModalZoneId(zoneId);
+    setShowImageModal(true);
+  };
+
+  const closeTextModal = () => {
+    setShowTextModal(false);
+    setTextModalThreadId(null);
+    setTextModalZoneId(null);
+    setTextModalValue('');
+  };
+
+  const handleSubmitTextModal = () => {
+    const trimmed = textModalValue.trim();
+    if (!trimmed) {
+      showToast('본문을 입력하세요.', 'error');
+      return;
+    }
+
+    if (textModalThreadId) {
+      updateThreadText(textModalThreadId, trimmed);
+      showToast('글을 수정했습니다.', 'success');
+      closeTextModal();
+      return;
+    }
+
+    const targetZoneId = textModalZoneId ?? primaryPageZoneId;
+    if (!selectedPage || !targetZoneId) {
+      showToast('영역을 먼저 선택하세요.', 'error');
+      return;
+    }
+
+    const targetZone =
+      pageMaster?.contentZones.find((zone) => zone.id === targetZoneId)
+      ?? pageMaster?.contentZones.find((zone) => getSlotIdentity(zone) === targetZoneId);
+    const threadId = addThreadWithText(selectedPage.id, targetZoneId, trimmed, getDefaultRoleForZone(targetZone));
+    if (!threadId) {
+      showToast('본문을 입력하세요.', 'error');
+      return;
+    }
+
+    showToast('글을 추가했습니다.', 'success');
+    closeTextModal();
+  };
+
+  const handleImportDocx = async (file: File) => {
+    if (!selectedPage) {
+      showToast('페이지를 먼저 선택하세요.', 'error');
+      return;
+    }
+
+    try {
+      setImportingDocx(true);
+      const parsed = await parseDocxManuscript(file);
+      const rootPageId = getChainRootPageId(document, selectedPage.id);
+      let applied = 0;
+
+      parsed.slots.forEach((slot) => {
+        const zone = findImportTargetZone(slot.slotKey);
+        if (!zone) {
+          return;
+        }
+        addThreadWithText(rootPageId, zone.id, slot.text, slot.role);
+        applied += 1;
+      });
+
+      if (!applied && parsed.rawText.trim()) {
+        const fallbackZone = findImportTargetZone('body');
+        if (fallbackZone) {
+          addThreadWithText(rootPageId, fallbackZone.id, parsed.rawText.trim(), 'paragraph');
+          applied = 1;
+        }
+      }
+
+      showToast(applied ? `원고 슬롯 ${applied}개 반영` : '맞는 텍스트 슬롯이 없습니다.', applied ? 'success' : 'error');
+    } catch (error) {
+      logError(error, 'PublishingEditor-docx-import');
+      showToast('워드 원고 분석에 실패했습니다.', 'error');
+    } finally {
+      setImportingDocx(false);
+    }
+  };
   const selectedBlock = useMemo(() => {
     const page = document.pages.find((item) => item.id === selection.pageId);
     const zone = page?.zones.find((item) => item.zoneId === selection.zoneId);
     return zone?.blocks.find((item) => item.id === selection.blockId) ?? null;
   }, [document.pages, selection.blockId, selection.pageId, selection.zoneId]);
-  const selectedDecoration = selectedMaster?.decorations.find((item) => templateSelection.type === 'decoration' && item.id === templateSelection.id) ?? null;
-  const selectedZoneTemplate = selectedMaster?.contentZones.find((item) => templateSelection.type === 'zone' && item.id === templateSelection.id) ?? null;
-  const recommendedPreset = getRecommendedPreset(document.meta.sourcePublicationType, document.meta.publicationType);
+  const currentPageTextSlots = useMemo(() => {
+    if (!selectedPage || !pageMaster) {
+      return [];
+    }
+
+    const rootPageId = getChainRootPageId(document, selectedPage.id);
+    const seen = new Set<string>();
+
+    return pageMaster.contentZones
+      .filter((zone) => zone.kind === 'text-flow')
+      .filter((zone) => {
+        const key = getSlotIdentity(zone);
+        if (seen.has(key)) {
+          return false;
+        }
+        seen.add(key);
+        return true;
+      })
+      .map((zone) => {
+        const slotThread = document.threads.find((thread) => {
+          const threadPage = document.pages.find((page) => page.id === thread.sourcePageId);
+          if (!threadPage) {
+            return false;
+          }
+          const threadRootPageId = getChainRootPageId(document, thread.sourcePageId);
+          if (threadRootPageId !== rootPageId) {
+            return false;
+          }
+          const threadMaster = document.masters.items.find((item) => item.id === threadPage.masterId);
+          const threadZone = threadMaster?.contentZones.find((item) => item.id === thread.sourceZoneId);
+          return threadZone ? getSlotIdentity(threadZone) === getSlotIdentity(zone) : false;
+        }) ?? null;
+
+        return {
+          key: getSlotIdentity(zone),
+          zone,
+          thread: slotThread,
+        };
+      });
+  }, [document, pageMaster, selectedPage]);
   const pxPerMm = getPxPerMm(document.layout.pagePreset);
   const alignmentWarningThresholdPx = document.layout.printGuides.alignmentWarningThresholdPx ?? 0.75;
   const pageNumberAlignmentPreset = document.layout.pageNumbering.alignmentPreset ?? 'center';
   const pageNumberMirrorOnEvenPages = document.layout.pageNumbering.mirrorOnEvenPages ?? false;
-  const selectedDecorationEditable = Boolean(
-    selectedDecoration
-    && !selectedDecoration.locked
-    && (
-      selectedDecoration.scope === 'global-fixed'
-        ? globalFixedManagerMode
-        : !selectedMaster?.locked
-    ),
-  );
-  const selectedZoneEditable = Boolean(
-    selectedZoneTemplate && !selectedMaster?.locked && selectedZoneTemplate.scope !== 'global-fixed' && !selectedZoneTemplate.locked,
-  );
   const globalFixedDecorations = selectedMaster?.decorations.filter((item) => item.scope === 'global-fixed') ?? [];
   const groupedGlobalFixedDecorations = useMemo(() => {
     return globalFixedDecorations.reduce<Record<string, typeof globalFixedDecorations>>((acc, decoration) => {
@@ -922,6 +1225,10 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
       }
 
       master.contentZones.forEach((zone) => {
+        if (!zone?.frame) {
+          return;
+        }
+
         const safeLeft = document.layout.pagePreset.safeMarginPx.left;
         const safeTop = document.layout.pagePreset.safeMarginPx.top;
         const safeRight = document.layout.pagePreset.widthPx - document.layout.pagePreset.safeMarginPx.right;
@@ -940,7 +1247,7 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
       });
 
       page.zones.forEach((zoneInstance) => {
-        const zoneTemplate = master.contentZones.find((item) => item.id === zoneInstance.zoneId);
+        const zoneTemplate = master.contentZones.find((item) => item.id === zoneInstance.zoneId && item.frame);
         zoneInstance.blocks.forEach((block) => {
           if (block.type === 'image') {
             if (!block.assetRef.src.trim()) {
@@ -1129,22 +1436,26 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
   }, [alignmentWarningThresholdPx, document.layout.pagePreset, document.meta.title.ko, document.pages, validationReport]);
 
   const handleAddImage = useCallback(() => {
-    if (!selectedPage || !selectedZoneId || !imageUrl.trim()) {
+    const targetZoneId = imageModalZoneId ?? primaryImageZoneId;
+    if (!selectedPage || !targetZoneId || !imageUrl.trim()) {
       return;
     }
 
-    addImageBlock(selectedPage.id, selectedZoneId, {
+    addImageBlock(selectedPage.id, targetZoneId, {
       src: imageUrl.trim(),
       naturalWidth: 1600,
       naturalHeight: 1200,
     });
     setImageUrl('');
-  }, [addImageBlock, imageUrl, selectedPage, selectedZoneId]);
+    setShowImageModal(false);
+    setImageModalZoneId(null);
+  }, [addImageBlock, imageModalZoneId, imageUrl, primaryImageZoneId, selectedPage]);
 
   const handleUploadFile = useCallback(
     async (event: React.ChangeEvent<HTMLInputElement>) => {
       const file = event.target.files?.[0];
-      if (!file || !selectedPage || !selectedZoneId) {
+      const targetZoneId = imageModalZoneId ?? primaryImageZoneId;
+      if (!file || !selectedPage || !targetZoneId) {
         return;
       }
 
@@ -1152,7 +1463,9 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
         setUploadingImage(true);
         setUploadProgress(0);
         const uploaded = await uploadPublicationImage(publicationId, file, setUploadProgress);
-        addImageBlock(selectedPage.id, selectedZoneId, uploaded);
+        addImageBlock(selectedPage.id, targetZoneId, uploaded);
+        setShowImageModal(false);
+        setImageModalZoneId(null);
         showToast('이미지가 Firebase Storage에 업로드되었습니다.', 'success');
       } catch (error) {
         logError(error, 'PublishingEditor-uploadImage');
@@ -1163,7 +1476,7 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
         event.target.value = '';
       }
     },
-    [addImageBlock, publicationId, selectedPage, selectedZoneId],
+    [addImageBlock, imageModalZoneId, primaryImageZoneId, publicationId, selectedPage],
   );
 
   const handleUploadMasterFile = useCallback(
@@ -1249,9 +1562,40 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
     }
   }, [document.pages, selectBlockInStore, selectPage]);
 
+  const handleJumpToPageNumber = useCallback(() => {
+    const pageNumber = Math.max(1, Number(pageJumpInput) || 0);
+    const targetPage = document.pages.find((page) => page.pageNumber === pageNumber);
+    if (!targetPage) {
+      showToast('페이지를 찾을 수 없습니다.', 'error');
+      return;
+    }
+
+    selectPage(targetPage.id);
+    pageRefs.current[targetPage.id]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    setPageJumpInput('');
+  }, [document.pages, pageJumpInput, selectPage]);
+  const handlePrevPage = useCallback(() => {
+    if (!selectedPage) {
+      return;
+    }
+    const target = document.pages.find((page) => page.pageNumber === selectedPage.pageNumber - 1);
+    if (target) {
+      selectPage(target.id);
+    }
+  }, [document.pages, selectedPage, selectPage]);
+  const handleNextPage = useCallback(() => {
+    if (!selectedPage) {
+      return;
+    }
+    const target = document.pages.find((page) => page.pageNumber === selectedPage.pageNumber + 1);
+    if (target) {
+      selectPage(target.id);
+    }
+  }, [document.pages, selectedPage, selectPage]);
+
   return (
     <div className="flex min-h-[calc(100vh-4rem)] bg-[#f3efe7] text-slate-900">
-      <aside className="editor-sidebar w-[360px] border-r border-slate-200 bg-white/90 px-5 py-6">
+      <aside className="editor-sidebar w-[360px] border-r border-slate-200 bg-white/90 px-5 py-6 [&_input]:bg-white [&_input]:text-slate-900 [&_select]:bg-white [&_select]:text-slate-900 [&_textarea]:bg-white [&_textarea]:text-slate-900">
         <div className="mb-6">
           <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Document</p>
           <input
@@ -1272,6 +1616,39 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
               ))}
             </select>
           ) : null}
+          <button
+            type="button"
+            onClick={() => {
+              window.location.href = `/studio/${publicationId}`;
+            }}
+            className="mt-3 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700"
+          >
+            마스터 스튜디오
+          </button>
+        </div>
+
+        <div className="mb-6 rounded-3xl border border-slate-900 bg-slate-900 p-4 text-white">
+          <div className="text-sm font-semibold">글 입력</div>
+          <div className="mt-1 text-xs text-slate-300">페이지 선택 후 아래 버튼을 누르면 입력창이 열립니다.</div>
+          <div className="mt-4 grid gap-2">
+            <button
+              type="button"
+              onClick={() => openTextModalForCreate()}
+              className="rounded-2xl bg-white px-4 py-3 text-sm font-semibold text-slate-900"
+            >
+              텍스트 넣기
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setImageModalZoneId(primaryImageZoneId);
+                setShowImageModal(true);
+              }}
+              className="rounded-2xl border border-white/20 px-4 py-3 text-sm font-semibold text-white"
+            >
+              이미지 넣기
+            </button>
+          </div>
         </div>
 
         <div className="editor-toolbar mb-6 flex flex-wrap gap-2">
@@ -1285,20 +1662,57 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
             <>
               <button
                 type="button"
-                onClick={() => addThread(selectedPage.id, selectedZoneId, 'heading')}
+                onClick={() => openTextModalForCreate()}
                 className="inline-flex items-center gap-2 rounded-full border border-slate-200 px-4 py-2 text-sm font-medium"
               >
                 <PlusIcon className="h-4 w-4" />
-                헤딩 추가
+                텍스트 추가
               </button>
               <button
                 type="button"
-                onClick={() => addThread(selectedPage.id, selectedZoneId, 'paragraph')}
+                onClick={() => {
+                  setImageModalZoneId(primaryImageZoneId);
+                  setShowImageModal(true);
+                }}
+                className="inline-flex items-center gap-2 rounded-full border border-slate-200 px-4 py-2 text-sm font-medium"
+              >
+                <PhotoIcon className="h-4 w-4" />
+                이미지 추가
+              </button>
+              <button
+                type="button"
+                onClick={() => addPage(selectedPage.masterId)}
                 className="inline-flex items-center gap-2 rounded-full border border-slate-200 px-4 py-2 text-sm font-medium"
               >
                 <PlusIcon className="h-4 w-4" />
-                본문 추가
+                페이지 추가
               </button>
+              <button
+                type="button"
+                onClick={() => deletePage(selectedPage.id)}
+                disabled={document.pages.length <= 1 || selectedPage.pageRole === 'cover'}
+                className="inline-flex items-center gap-2 rounded-full border border-rose-200 bg-rose-50 px-4 py-2 text-sm font-medium text-rose-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <TrashIcon className="h-4 w-4" />
+                페이지 삭제
+              </button>
+              <label className={`inline-flex items-center gap-2 rounded-full border border-slate-200 px-4 py-2 text-sm font-medium ${importingDocx ? 'cursor-wait opacity-60' : 'cursor-pointer'}`}>
+                <PlusIcon className="h-4 w-4" />
+                원고 가져오기
+                <input
+                  type="file"
+                  accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                  className="hidden"
+                  disabled={importingDocx}
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    if (file) {
+                      void handleImportDocx(file);
+                    }
+                    event.target.value = '';
+                  }}
+                />
+              </label>
             </>
           ) : null}
         </div>
@@ -1331,7 +1745,7 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
           <p className="mt-2 text-xs text-slate-400">업로드 후 배치</p>
         </div>
 
-        <div className="mb-6 rounded-3xl border border-slate-200 bg-slate-50 p-4">
+        {false && <div className="mb-6 rounded-3xl border border-slate-200 bg-slate-50 p-4">
           <div className="mb-3 text-sm font-semibold text-slate-800">페이지 번호</div>
           <label className="mb-3 flex items-center justify-between rounded-2xl bg-white px-4 py-3 text-sm">
             <span>표시</span>
@@ -1406,9 +1820,9 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
               onChange={(event) => updatePageNumbering({ mirrorOnEvenPages: event.target.checked })}
             />
           </label>
-        </div>
+        </div>}
 
-        <div className="mb-6 rounded-3xl border border-slate-200 bg-slate-50 p-4">
+        {false && <div className="mb-6 rounded-3xl border border-slate-200 bg-slate-50 p-4">
           <div className="mb-3 text-sm font-semibold text-slate-800">출력 가이드</div>
           <label className="mb-3 flex items-center justify-between rounded-2xl bg-white px-4 py-3 text-sm">
             <span>안전 영역</span>
@@ -1465,9 +1879,9 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
               {formatMm(pxToMm(alignmentWarningThresholdPx, document.layout.pagePreset))}
             </p>
           </div>
-        </div>
+        </div>}
 
-        {selectedMaster ? (
+        {false && selectedMaster ? (
           <div className="mb-6 rounded-3xl border border-slate-200 bg-slate-50 p-4">
             <div className="mb-3 flex items-center justify-between">
               <div>
@@ -1618,7 +2032,7 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
           </div>
         ) : null}
 
-        {selectedMaster ? (
+        {false && selectedMaster ? (
           <div className="mb-6 rounded-3xl border border-slate-200 bg-slate-50 p-4">
             <div className="mb-4 rounded-2xl bg-white p-3">
               <div className="mb-3 flex items-center justify-between">
@@ -1715,7 +2129,7 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
                             }}
                           />
                         ))}
-                        {master.contentZones.slice(0, 4).map((zone) => (
+                        {master.contentZones.filter((zone) => zone?.frame).slice(0, 4).map((zone) => (
                           <div
                             key={zone.id}
                             className="absolute border border-dashed border-sky-400/80"
@@ -1783,31 +2197,6 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
                 className="h-11 w-full rounded-2xl border border-slate-200 bg-white p-2"
               />
             </label>
-
-            <div className="mb-4">
-              <div className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">템플릿 프리셋</div>
-              <button
-                type="button"
-                onClick={() => applyTemplatePreset(selectedMaster.id, recommendedPreset)}
-                disabled={selectedMaster.locked}
-                className="mb-2 w-full rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white"
-              >
-                추천: {TEMPLATE_PRESET_LABELS[recommendedPreset]}
-              </button>
-              <div className="grid grid-cols-2 gap-2">
-                {(Object.keys(TEMPLATE_PRESET_LABELS) as TemplatePresetKey[]).map((preset) => (
-                  <button
-                    key={preset}
-                    type="button"
-                    onClick={() => applyTemplatePreset(selectedMaster.id, preset)}
-                    disabled={selectedMaster.locked}
-                    className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:border-slate-400 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {TEMPLATE_PRESET_LABELS[preset]}
-                  </button>
-                ))}
-              </div>
-            </div>
 
             <div className="space-y-3">
               {templateDecorations.map((decoration) => (
@@ -1962,329 +2351,143 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
           </div>
         ) : null}
 
-        {(selectedDecoration || selectedZoneTemplate) ? (
-          <div className="mb-6 rounded-3xl border border-slate-200 bg-slate-50 p-4">
-            <div className="mb-3 flex items-center justify-between">
-              <div className="text-sm font-semibold text-slate-800">
-                {selectedDecoration ? '선택 장식 속성' : '선택 텍스트 영역 속성'}
-              </div>
-              {selectedDecoration && selectedMaster ? (
-                <button
-                  type="button"
-                  onClick={() => toggleMasterDecorationLock(selectedMaster.id, selectedDecoration.id)}
-                  disabled={selectedDecoration.scope === 'global-fixed' || selectedMaster.locked}
-                  className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {selectedDecoration.locked ? <LockClosedIcon className="h-4 w-4" /> : <LockOpenIcon className="h-4 w-4" />}
-                  {selectedDecoration.locked ? '장식 잠금 해제' : '장식 잠금'}
-                </button>
-              ) : null}
-              {selectedZoneTemplate && selectedMaster ? (
-                <button
-                  type="button"
-                  onClick={() => toggleMasterZoneLock(selectedMaster.id, selectedZoneTemplate.id)}
-                  disabled={selectedZoneTemplate.scope === 'global-fixed' || selectedMaster.locked}
-                  className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {selectedZoneTemplate.locked ? <LockClosedIcon className="h-4 w-4" /> : <LockOpenIcon className="h-4 w-4" />}
-                  {selectedZoneTemplate.locked ? '영역 잠금 해제' : '영역 잠금'}
-                </button>
-              ) : null}
-            </div>
-            <p className="mb-3 text-xs text-slate-500">
-              {selectedDecoration
-                ? `Scope: ${selectedDecoration.scope}${selectedDecoration.locked ? ' · locked' : ''}`
-                : selectedZoneTemplate
-                  ? `Scope: ${selectedZoneTemplate.scope}${selectedZoneTemplate.locked ? ' · locked' : ''}`
-                  : ''}
-            </p>
-
-            {selectedDecoration && selectedMaster ? (
-              <div className="grid grid-cols-2 gap-2">
-                <label className="block">
-                  <span className="mb-1 block text-xs text-slate-400">X</span>
-                  <input
-                    type="number"
-                    value={selectedDecoration.x}
-                    disabled={!selectedDecorationEditable}
-                    onChange={(event) => updateSelectedDecorationFields(selectedDecoration.id, { x: Number(event.target.value) || 0 })}
-                    className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                  />
-                </label>
-                <label className="block">
-                  <span className="mb-1 block text-xs text-slate-400">X (mm)</span>
-                  <input
-                    type="number"
-                    step="0.1"
-                    value={pxToMm(selectedDecoration.x, document.layout.pagePreset).toFixed(1)}
-                    disabled={!selectedDecorationEditable}
-                    onChange={(event) => updateSelectedDecorationFields(selectedDecoration.id, { x: mmToPx(Number(event.target.value) || 0, document.layout.pagePreset) })}
-                    className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                  />
-                </label>
-                <label className="block">
-                  <span className="mb-1 block text-xs text-slate-400">Y</span>
-                  <input
-                    type="number"
-                    value={selectedDecoration.y}
-                    disabled={!selectedDecorationEditable}
-                    onChange={(event) => updateSelectedDecorationFields(selectedDecoration.id, { y: Number(event.target.value) || 0 })}
-                    className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                  />
-                </label>
-                <label className="block">
-                  <span className="mb-1 block text-xs text-slate-400">Y (mm)</span>
-                  <input
-                    type="number"
-                    step="0.1"
-                    value={pxToMm(selectedDecoration.y, document.layout.pagePreset).toFixed(1)}
-                    disabled={!selectedDecorationEditable}
-                    onChange={(event) => updateSelectedDecorationFields(selectedDecoration.id, { y: mmToPx(Number(event.target.value) || 0, document.layout.pagePreset) })}
-                    className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                  />
-                </label>
-                <label className="block">
-                  <span className="mb-1 block text-xs text-slate-400">Width</span>
-                  <input
-                    type="number"
-                    value={selectedDecoration.width}
-                    disabled={!selectedDecorationEditable}
-                    onChange={(event) => updateSelectedDecorationFields(selectedDecoration.id, { width: Number(event.target.value) || 1 })}
-                    className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                  />
-                </label>
-                <label className="block">
-                  <span className="mb-1 block text-xs text-slate-400">Width (mm)</span>
-                  <input
-                    type="number"
-                    step="0.1"
-                    value={pxToMm(selectedDecoration.width, document.layout.pagePreset).toFixed(1)}
-                    disabled={!selectedDecorationEditable}
-                    onChange={(event) => updateSelectedDecorationFields(selectedDecoration.id, { width: mmToPx(Number(event.target.value) || 0, document.layout.pagePreset) })}
-                    className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                  />
-                </label>
-                <label className="block">
-                  <span className="mb-1 block text-xs text-slate-400">Height</span>
-                  <input
-                    type="number"
-                    value={selectedDecoration.height}
-                    disabled={!selectedDecorationEditable}
-                    onChange={(event) => updateSelectedDecorationFields(selectedDecoration.id, { height: Number(event.target.value) || 1 })}
-                    className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                  />
-                </label>
-                <label className="block">
-                  <span className="mb-1 block text-xs text-slate-400">Height (mm)</span>
-                  <input
-                    type="number"
-                    step="0.1"
-                    value={pxToMm(selectedDecoration.height, document.layout.pagePreset).toFixed(1)}
-                    disabled={!selectedDecorationEditable}
-                    onChange={(event) => updateSelectedDecorationFields(selectedDecoration.id, { height: mmToPx(Number(event.target.value) || 0, document.layout.pagePreset) })}
-                    className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                  />
-                </label>
-              </div>
-            ) : null}
-
-            {selectedZoneTemplate && selectedMaster ? (
-              <div className="grid grid-cols-2 gap-2">
-                <label className="block">
-                  <span className="mb-1 block text-xs text-slate-400">X</span>
-                  <input
-                    type="number"
-                    value={selectedZoneTemplate.frame.x}
-                    disabled={!selectedZoneEditable}
-                    onChange={(event) => updateMasterZoneFrame(selectedMaster.id, selectedZoneTemplate.id, { x: Number(event.target.value) || 0 })}
-                    className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                  />
-                </label>
-                <label className="block">
-                  <span className="mb-1 block text-xs text-slate-400">X (mm)</span>
-                  <input
-                    type="number"
-                    step="0.1"
-                    value={pxToMm(selectedZoneTemplate.frame.x, document.layout.pagePreset).toFixed(1)}
-                    disabled={!selectedZoneEditable}
-                    onChange={(event) => updateMasterZoneFrame(selectedMaster.id, selectedZoneTemplate.id, { x: mmToPx(Number(event.target.value) || 0, document.layout.pagePreset) })}
-                    className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                  />
-                </label>
-                <label className="block">
-                  <span className="mb-1 block text-xs text-slate-400">Y</span>
-                  <input
-                    type="number"
-                    value={selectedZoneTemplate.frame.y}
-                    disabled={!selectedZoneEditable}
-                    onChange={(event) => updateMasterZoneFrame(selectedMaster.id, selectedZoneTemplate.id, { y: Number(event.target.value) || 0 })}
-                    className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                  />
-                </label>
-                <label className="block">
-                  <span className="mb-1 block text-xs text-slate-400">Y (mm)</span>
-                  <input
-                    type="number"
-                    step="0.1"
-                    value={pxToMm(selectedZoneTemplate.frame.y, document.layout.pagePreset).toFixed(1)}
-                    disabled={!selectedZoneEditable}
-                    onChange={(event) => updateMasterZoneFrame(selectedMaster.id, selectedZoneTemplate.id, { y: mmToPx(Number(event.target.value) || 0, document.layout.pagePreset) })}
-                    className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                  />
-                </label>
-                <label className="block">
-                  <span className="mb-1 block text-xs text-slate-400">Width</span>
-                  <input
-                    type="number"
-                    value={selectedZoneTemplate.frame.width}
-                    disabled={!selectedZoneEditable}
-                    onChange={(event) => updateMasterZoneFrame(selectedMaster.id, selectedZoneTemplate.id, { width: Number(event.target.value) || 1 })}
-                    className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                  />
-                </label>
-                <label className="block">
-                  <span className="mb-1 block text-xs text-slate-400">Width (mm)</span>
-                  <input
-                    type="number"
-                    step="0.1"
-                    value={pxToMm(selectedZoneTemplate.frame.width, document.layout.pagePreset).toFixed(1)}
-                    disabled={!selectedZoneEditable}
-                    onChange={(event) => updateMasterZoneFrame(selectedMaster.id, selectedZoneTemplate.id, { width: mmToPx(Number(event.target.value) || 0, document.layout.pagePreset) })}
-                    className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                  />
-                </label>
-                <label className="block">
-                  <span className="mb-1 block text-xs text-slate-400">Height</span>
-                  <input
-                    type="number"
-                    value={selectedZoneTemplate.frame.height}
-                    disabled={!selectedZoneEditable}
-                    onChange={(event) => updateMasterZoneFrame(selectedMaster.id, selectedZoneTemplate.id, { height: Number(event.target.value) || 1 })}
-                    className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                  />
-                </label>
-                <label className="block">
-                  <span className="mb-1 block text-xs text-slate-400">Height (mm)</span>
-                  <input
-                    type="number"
-                    step="0.1"
-                    value={pxToMm(selectedZoneTemplate.frame.height, document.layout.pagePreset).toFixed(1)}
-                    disabled={!selectedZoneEditable}
-                    onChange={(event) => updateMasterZoneFrame(selectedMaster.id, selectedZoneTemplate.id, { height: mmToPx(Number(event.target.value) || 0, document.layout.pagePreset) })}
-                    className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                  />
-                </label>
-              </div>
-            ) : null}
-          </div>
-        ) : null}
+        {null}
 
         <div className="space-y-5 overflow-y-auto pb-10">
-          {document.threads.map((thread) => (
-            <section key={thread.id} className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
+          {currentPageTextSlots.map(({ key, zone, thread }) => (
+            <section key={key} className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
               <div className="mb-3 flex items-center justify-between gap-3">
                 <div>
-                  <p className="text-sm font-semibold text-slate-800">{roleLabel[thread.semanticRole]}</p>
-                  <p className="text-xs text-slate-500">{thread.id}</p>
+                  <p className="text-sm font-semibold text-slate-800">{zone.name}</p>
+                  <p className="text-xs text-slate-500">{inferZoneSlotKey(zone) || zone.id}</p>
                 </div>
                 <span className="rounded-full bg-white px-3 py-1 text-xs text-slate-500">
-                  {thread.zoneSequence.length} page
+                  {thread ? `${thread.zoneSequence.length} page` : '비어 있음'}
                 </span>
               </div>
-              <div className="mb-3 flex gap-2">
-                <select
-                  value={thread.semanticRole}
-                  onChange={(event) => updateThreadRole(thread.id, event.target.value as TextRole)}
-                  className="flex-1 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none"
-                >
-                  {roleOptions.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
+              {thread ? (
+                <div className="mb-3 flex gap-2">
+                  <select
+                    value={thread.semanticRole}
+                    onChange={(event) => updateThreadRole(thread.id, event.target.value as TextRole)}
+                    className="flex-1 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none"
+                  >
+                    {roleOptions.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    onClick={() => toggleThreadToc(thread.id)}
+                    className={`rounded-full px-4 py-2 text-xs font-semibold ${
+                      thread.ebook.toc.enabled ? 'bg-amber-100 text-amber-800' : 'bg-white text-slate-600'
+                    }`}
+                  >
+                    TOC {thread.ebook.toc.enabled ? 'ON' : 'OFF'}
+                  </button>
+                </div>
+              ) : null}
+              <div className="max-h-44 overflow-hidden rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700">
+                {thread ? getThreadPlainText(document, thread.id).trim() || '내용 없음' : '아직 내용 없음'}
+              </div>
+              <div className="mt-3 flex flex-wrap gap-2">
                 <button
                   type="button"
-                  onClick={() => toggleThreadToc(thread.id)}
-                  className={`rounded-full px-4 py-2 text-xs font-semibold ${
-                    thread.ebook.toc.enabled ? 'bg-amber-100 text-amber-800' : 'bg-white text-slate-600'
-                  }`}
+                  onClick={() => {
+                    if (thread) {
+                      openTextModalForEdit(thread.id);
+                    } else {
+                      setActiveContentZoneId(zone.id);
+                      setTextModalThreadId(null);
+                      setTextModalZoneId(zone.id);
+                      setTextModalValue('');
+                      setShowTextModal(true);
+                    }
+                  }}
+                  className="rounded-full bg-slate-900 px-4 py-2 text-xs font-semibold text-white"
                 >
-                  TOC {thread.ebook.toc.enabled ? 'ON' : 'OFF'}
+                  {thread ? '내용 수정' : '내용 입력'}
                 </button>
-              </div>
-              <RichTextThreadEditor
-                runs={thread.canonicalText}
-                onChange={(runs) => updateThreadRuns(thread.id, runs)}
-              />
-              <div className="mt-3 grid grid-cols-2 gap-2">
-                <label className="block">
-                  <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Font Size</span>
-                  <input
-                    type="number"
-                    value={thread.styleOverride?.fontSize ?? ''}
-                    placeholder="auto"
-                    onChange={(event) =>
-                      updateThreadStyleOverride(thread.id, {
-                        fontSize: Number(event.target.value) || undefined,
-                      })
-                    }
-                    className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                  />
-                </label>
-                <label className="block">
-                  <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Line Height</span>
-                  <input
-                    type="number"
-                    step="0.05"
-                    value={thread.styleOverride?.lineHeight ?? ''}
-                    placeholder="auto"
-                    onChange={(event) =>
-                      updateThreadStyleOverride(thread.id, {
-                        lineHeight: Number(event.target.value) || undefined,
-                      })
-                    }
-                    className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                  />
-                </label>
-                <label className="block">
-                  <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Letter Spacing</span>
-                  <input
-                    type="number"
-                    step="0.1"
-                    value={thread.styleOverride?.letterSpacing ?? ''}
-                    placeholder="auto"
-                    onChange={(event) =>
-                      updateThreadStyleOverride(thread.id, {
-                        letterSpacing: Number(event.target.value) || undefined,
-                      })
-                    }
-                    className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                  />
-                </label>
-                <label className="block">
-                  <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Color</span>
-                  <input
-                    type="color"
-                    value={thread.styleOverride?.color ?? '#222222'}
-                    onChange={(event) =>
-                      updateThreadStyleOverride(thread.id, {
-                        color: event.target.value,
-                      })
-                    }
-                    className="h-10 w-full rounded-xl border border-slate-200 p-1"
-                  />
-                </label>
+                {thread ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      deleteThread(thread.id);
+                      showToast('글을 삭제했습니다.', 'success');
+                    }}
+                    className="rounded-full border border-rose-200 bg-white px-4 py-2 text-xs font-semibold text-rose-700"
+                  >
+                    삭제
+                  </button>
+                ) : null}
               </div>
               <p className="mt-2 text-xs text-slate-400">
-                Plain text preview: {getThreadPlainText(document, thread.id).slice(0, 80)}
+                {thread ? `${thread.zoneSequence.length} page · ${roleLabel[thread.semanticRole]}` : '빈 슬롯'}
               </p>
             </section>
           ))}
+          {!currentPageTextSlots.length ? (
+            <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-5 text-sm text-slate-500">
+              현재 페이지 텍스트 슬롯 없음
+            </div>
+          ) : null}
         </div>
       </aside>
 
       <main className="flex-1 px-8 py-6">
+        <div className="fixed left-1/2 top-24 z-30 -translate-x-1/2 rounded-2xl border border-slate-200 bg-white/95 p-3 shadow-xl backdrop-blur">
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handlePrevPage}
+              disabled={!selectedPage || selectedPage.pageNumber <= 1}
+              className="rounded-full border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 disabled:opacity-40"
+            >
+              이전
+            </button>
+            <select
+              value={selectedPage?.id ?? ''}
+              onChange={(event) => selectPage(event.target.value)}
+              className="rounded-full border border-slate-200 px-3 py-2 text-sm text-slate-900"
+            >
+              {document.pages.map((page) => (
+                <option key={page.id} value={page.id}>
+                  {page.pageNumber}p
+                </option>
+              ))}
+            </select>
+            <input
+              type="number"
+              min={1}
+              placeholder="p"
+              value={pageJumpInput}
+              onChange={(event) => setPageJumpInput(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  handleJumpToPageNumber();
+                }
+              }}
+              className="w-14 rounded-full border border-slate-200 px-3 py-2 text-center text-sm text-slate-900"
+            />
+            <button
+              type="button"
+              onClick={handleJumpToPageNumber}
+              className="rounded-full border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700"
+            >
+              이동
+            </button>
+            <button
+              type="button"
+              onClick={handleNextPage}
+              disabled={!selectedPage || selectedPage.pageNumber >= document.pages.length}
+              className="rounded-full border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 disabled:opacity-40"
+            >
+              다음
+            </button>
+          </div>
+        </div>
         <div className="editor-toolbar mb-6 flex flex-wrap items-center justify-between gap-4">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.25em] text-slate-500">A4 Publishing Editor</p>
@@ -2304,34 +2507,42 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
         </div>
 
         <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_320px]">
-          <section className="space-y-10 overflow-auto rounded-[32px] border border-slate-200 bg-[#ece6da] px-6 py-8">
-            {document.pages.map((page, pageIndex) => (
+          <section className="overflow-auto rounded-[32px] border border-slate-200 bg-[#ece6da] px-6 py-8">
+            {selectedPage ? (
               <PublishingPagePreview
-                key={page.id}
-                page={page}
-                pageIndex={pageIndex}
+                key={selectedPage.id}
+                page={selectedPage}
+                pageIndex={selectedPage.pageNumber - 1}
                 templateSelection={templateSelection}
                 setTemplateSelection={setTemplateSelection}
                 mode="interactive"
                 globalFixedManagerMode={globalFixedManagerMode}
+                onTextBlockOpen={handleCanvasTextOpen}
+                onZoneActivate={handleZoneActivate}
+                enableTemplateEditing={false}
                 pageRef={(node) => {
-                  pageRefs.current[page.id] = node;
+                  pageRefs.current[selectedPage.id] = node;
                 }}
               />
-            ))}
+            ) : null}
           </section>
 
-          <aside className="space-y-4 rounded-[28px] border border-slate-200 bg-white p-5">
-            <div className="flex items-center gap-2 text-sm font-semibold text-slate-700">
-              <ArrowPathIcon className="h-4 w-4" />
-              Core Status
-            </div>
-
+          <aside className="space-y-4 rounded-[28px] border border-slate-200 bg-white p-5 [&_input]:bg-white [&_input]:text-slate-900 [&_select]:bg-white [&_select]:text-slate-900 [&_textarea]:bg-white [&_textarea]:text-slate-900">
             <div className="rounded-2xl bg-slate-50 p-4 text-sm text-slate-600">
-              <p>Invalidated Threads: {pagination.invalidatedThreadIds.length}</p>
-              <p>Last Paginated: {pagination.lastPaginatedAt || 'not yet'}</p>
-              <p>Last Saved: {autosave.lastSavedAt || 'not yet'}</p>
-              <p>Save State: {autosave.lastError || (autosave.isSaving ? 'saving' : autosave.dirty ? 'dirty' : 'synced')}</p>
+              <p className="mb-3 font-semibold text-slate-800">페이지 정보</p>
+              <p>현재 페이지: {selectedPage?.pageNumber ?? '-'}</p>
+              <p>현재 마스터: {pageMaster?.name ?? '-'}</p>
+              <p>선택 영역: {selection.zoneId ?? '없음'}</p>
+              <p>저장 상태: {autosave.lastError || (autosave.isSaving ? '저장 중' : autosave.dirty ? '수정됨' : '저장됨')}</p>
+              <button
+                type="button"
+                onClick={() => {
+                  window.location.href = `/studio/${publicationId}`;
+                }}
+                className="mt-3 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700"
+              >
+                마스터 스튜디오에서 템플릿 수정
+              </button>
             </div>
 
             <div className="rounded-2xl bg-slate-50 p-4 text-sm text-slate-600">
@@ -2443,16 +2654,9 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
               )}
             </div>
 
-            {selectedThread ? (
-              <div className="rounded-2xl bg-slate-50 p-4 text-sm text-slate-600">
-                <p className="mb-3 font-semibold text-slate-800">선택 텍스트 스레드</p>
-                <p>Role: {roleLabel[selectedThread.semanticRole]}</p>
-                <p>TOC: {selectedThread.ebook.toc.enabled ? 'Enabled' : 'Disabled'}</p>
-                <p>Flow Pages: {selectedThread.zoneSequence.length}</p>
-              </div>
-            ) : null}
+            {null}
 
-            <div className="rounded-2xl bg-slate-50 p-4 text-sm text-slate-600">
+            {false && <div className="rounded-2xl bg-slate-50 p-4 text-sm text-slate-600">
               <p className="mb-3 font-semibold text-slate-800">Publication</p>
               <p>ID: {publicationId}</p>
               <p>Preset: {document.layout.pagePreset.key}</p>
@@ -2460,7 +2664,7 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
               <p>Template Selection: {templateSelection.type ? `${templateSelection.type}:${templateSelection.id}` : 'none'}</p>
               <p>A4 Width: {formatMm(document.layout.pagePreset.widthMm)}</p>
               <p>A4 Height: {formatMm(document.layout.pagePreset.heightMm)}</p>
-            </div>
+            </div>}
 
             <div className="rounded-2xl bg-slate-50 p-4 text-sm text-slate-600">
               <p className="mb-3 font-semibold text-slate-800">정렬 검증</p>
@@ -2487,7 +2691,7 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
                   ))}
                 </div>
               ) : (
-                <p className="mt-3 text-xs text-slate-400">검증 마커를 켜고 페이지가 렌더되면 편집기와 PDF 루트의 좌표 차이가 표시됩니다.</p>
+                <p className="mt-3 text-xs text-slate-400">마스터 스튜디오에서 가이드를 보고 맞춘 뒤 여기서 PDF를 점검하세요.</p>
               )}
             </div>
 
@@ -2542,7 +2746,7 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
                 value={newMasterName}
                 onChange={(event) => setNewMasterName(event.target.value)}
                 placeholder="예: 발표집 2단 기본형"
-                className="w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm"
+                className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900"
               />
             </label>
 
@@ -2585,6 +2789,114 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
                 생성
               </button>
             </div>
+          </div>
+        </div>
+      ) : null}
+      {showTextModal ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 px-4">
+          <div className="w-full max-w-3xl rounded-[28px] bg-white p-6 shadow-2xl">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Text Editor</p>
+                <h2 className="mt-2 text-2xl font-semibold text-slate-900">{textModalThreadId ? '텍스트 수정' : '텍스트 입력'}</h2>
+                <p className="mt-2 text-sm text-slate-500">
+                  {selectedPage ? `${selectedPage.id} · ${textModalZoneId ?? selectedZoneId}` : '영역 선택 필요'}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={closeTextModal}
+                className="rounded-full border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-600"
+              >
+                닫기
+              </button>
+            </div>
+
+            <div className="mt-5 rounded-2xl bg-slate-50 px-4 py-3 text-sm text-slate-600">
+              폰트와 정렬은 마스터 설정을 따릅니다.
+            </div>
+
+            <label className="mt-5 block">
+              <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">내용</span>
+              <textarea
+                value={textModalValue}
+                onChange={(event) => setTextModalValue(event.target.value)}
+                placeholder="본문을 붙여넣거나 입력하세요."
+                className="min-h-[280px] w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none"
+              />
+            </label>
+
+            <div className="mt-6 flex justify-end gap-3">
+              <button
+                type="button"
+                onClick={closeTextModal}
+                className="rounded-full border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700"
+              >
+                취소
+              </button>
+              <button
+                type="button"
+                onClick={handleSubmitTextModal}
+                className="rounded-full bg-slate-900 px-5 py-2 text-sm font-semibold text-white"
+              >
+                저장
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {showImageModal ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 px-4">
+          <div className="w-full max-w-2xl rounded-[28px] bg-white p-6 shadow-2xl">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Image Editor</p>
+                <h2 className="mt-2 text-2xl font-semibold text-slate-900">이미지 입력</h2>
+                <p className="mt-2 text-sm text-slate-500">
+                  {selectedPage ? `${selectedPage.id} · ${imageModalZoneId ?? primaryImageZoneId}` : '영역 선택 필요'}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowImageModal(false);
+                  setImageModalZoneId(null);
+                }}
+                className="rounded-full border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-600"
+              >
+                닫기
+              </button>
+            </div>
+
+            <div className="mt-5 rounded-2xl bg-slate-50 px-4 py-3 text-sm text-slate-600">
+              이미지 영역 규칙에 맞춰 배치됩니다.
+            </div>
+
+            <label className="mt-5 block">
+              <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">URL</span>
+              <input
+                value={imageUrl}
+                onChange={(event) => setImageUrl(event.target.value)}
+                placeholder="https://example.com/image.jpg"
+                className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900"
+              />
+            </label>
+
+            <div className="mt-5 flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                onClick={handleAddImage}
+                className="rounded-full bg-slate-900 px-5 py-2 text-sm font-semibold text-white"
+              >
+                URL로 추가
+              </button>
+              <label className="inline-flex cursor-pointer items-center gap-2 rounded-full border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700">
+                <PhotoIcon className="h-4 w-4" />
+                파일 업로드
+                <input type="file" accept="image/*" onChange={handleUploadFile} className="hidden" />
+              </label>
+            </div>
+            {uploadingImage ? <p className="mt-3 text-xs text-slate-500">업로드 중... {Math.round(uploadProgress * 100)}%</p> : null}
           </div>
         </div>
       ) : null}
@@ -2656,6 +2968,7 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
             setTemplateSelection={() => undefined}
             mode="export"
             globalFixedManagerMode={false}
+            onTextBlockOpen={() => undefined}
             pageRef={(node) => {
               pdfPageRefs.current[page.id] = node;
             }}

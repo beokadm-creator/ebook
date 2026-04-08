@@ -27,6 +27,7 @@ export const A4_VERTICAL_PRESET = {
 export const createMainBodyZone = (): ContentZoneTemplate => ({
   id: 'body_main',
   name: 'Main Text Flow',
+  slotKey: 'body',
   kind: 'text-flow',
   locked: false,
   scope: 'template-fixed',
@@ -62,9 +63,44 @@ export const createMainBodyZone = (): ContentZoneTemplate => ({
   },
 });
 
+export const createImageZone = (name = 'Image Zone'): ContentZoneTemplate => ({
+  id: 'image_zone',
+  name,
+  slotKey: 'image',
+  kind: 'media-freeform',
+  locked: false,
+  scope: 'template-fixed',
+  allowOverflowSource: false,
+  frame: {
+    x: 72,
+    y: 96,
+    width: 260,
+    height: 220,
+  },
+  style: {
+    fontFamily: 'Noto Serif KR',
+    fontSize: 12,
+    fontWeight: 400,
+    lineHeight: 1.4,
+    letterSpacing: 0,
+    textAlign: 'center',
+    color: '#475569',
+  },
+  constraints: {
+    padding: {
+      top: 0,
+      right: 0,
+      bottom: 0,
+      left: 0,
+    },
+    verticalAlign: 'middle',
+  },
+});
+
 export const createCoverZone = (): ContentZoneTemplate => ({
   id: 'cover_title_zone',
   name: 'Cover Title Zone',
+  slotKey: 'title',
   kind: 'text-flow',
   locked: false,
   scope: 'template-fixed',
@@ -102,13 +138,14 @@ export const createSectionLeadZones = (): ContentZoneTemplate[] => [
   {
     id: 'section_lead_header',
     name: 'Section Lead Header',
+    slotKey: 'section_title',
     kind: 'text-flow',
     locked: false,
     scope: 'template-fixed',
     allowOverflowSource: true,
-    flowGroupId: 'section_lead_flow',
+    flowGroupId: 'section_lead_header',
     flowOrder: 1,
-    allowThreadContinuation: true,
+    allowThreadContinuation: false,
     frame: {
       x: 72,
       y: 140,
@@ -134,12 +171,13 @@ export const createSectionLeadZones = (): ContentZoneTemplate[] => [
   {
     id: 'section_lead_body',
     name: 'Section Lead Body',
+    slotKey: 'body',
     kind: 'text-flow',
     locked: false,
     scope: 'template-fixed',
     allowOverflowSource: true,
-    flowGroupId: 'section_lead_flow',
-    flowOrder: 2,
+    flowGroupId: 'section_lead_body',
+    flowOrder: 1,
     allowThreadContinuation: true,
     frame: {
       x: 72,
@@ -279,6 +317,7 @@ export const createTwoColumnZones = (): ContentZoneTemplate[] => [
   {
     id: 'body_col_left',
     name: 'Left Column',
+    slotKey: 'body',
     kind: 'text-flow',
     locked: false,
     scope: 'template-fixed',
@@ -311,6 +350,7 @@ export const createTwoColumnZones = (): ContentZoneTemplate[] => [
   {
     id: 'body_col_right',
     name: 'Right Column',
+    slotKey: 'body',
     kind: 'text-flow',
     locked: false,
     scope: 'template-fixed',
@@ -346,13 +386,14 @@ export const createPosterSummaryZones = (): ContentZoneTemplate[] => [
   {
     id: 'poster_summary_top',
     name: 'Poster Summary',
+    slotKey: 'summary',
     kind: 'text-flow',
     locked: false,
     scope: 'template-fixed',
     allowOverflowSource: true,
-    flowGroupId: 'poster_flow',
+    flowGroupId: 'poster_summary',
     flowOrder: 1,
-    allowThreadContinuation: true,
+    allowThreadContinuation: false,
     frame: {
       x: 72,
       y: 96,
@@ -378,12 +419,13 @@ export const createPosterSummaryZones = (): ContentZoneTemplate[] => [
   {
     id: 'poster_summary_left',
     name: 'Poster Left',
+    slotKey: 'body',
     kind: 'text-flow',
     locked: false,
     scope: 'template-fixed',
     allowOverflowSource: true,
-    flowGroupId: 'poster_flow',
-    flowOrder: 2,
+    flowGroupId: 'poster_body',
+    flowOrder: 1,
     allowThreadContinuation: true,
     frame: {
       x: 72,
@@ -410,12 +452,13 @@ export const createPosterSummaryZones = (): ContentZoneTemplate[] => [
   {
     id: 'poster_summary_right',
     name: 'Poster Right',
+    slotKey: 'body',
     kind: 'text-flow',
     locked: false,
     scope: 'template-fixed',
     allowOverflowSource: true,
-    flowGroupId: 'poster_flow',
-    flowOrder: 3,
+    flowGroupId: 'poster_body',
+    flowOrder: 2,
     allowThreadContinuation: true,
     frame: {
       x: 417,
@@ -445,13 +488,14 @@ export const createPresentationTwoColumnZones = (): ContentZoneTemplate[] => [
   {
     id: 'presentation_intro',
     name: 'Presentation Intro',
+    slotKey: 'summary',
     kind: 'text-flow',
     locked: false,
     scope: 'template-fixed',
     allowOverflowSource: true,
-    flowGroupId: 'presentation_flow',
+    flowGroupId: 'presentation_intro',
     flowOrder: 1,
-    allowThreadContinuation: true,
+    allowThreadContinuation: false,
     frame: {
       x: 72,
       y: 96,
@@ -478,8 +522,8 @@ export const createPresentationTwoColumnZones = (): ContentZoneTemplate[] => [
     ...zone,
     id: index === 0 ? 'presentation_left' : 'presentation_right',
     name: index === 0 ? 'Presentation Left' : 'Presentation Right',
-    flowGroupId: 'presentation_flow',
-    flowOrder: index + 2,
+    flowGroupId: 'presentation_body',
+    flowOrder: index + 1,
     frame: {
       ...zone.frame,
       y: 280,

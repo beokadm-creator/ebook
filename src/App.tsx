@@ -8,7 +8,6 @@ import MyPage from './components/mypage/MyPage';
 import AdminDashboard from './components/admin/AdminDashboard';
 import { ConferenceManagement } from './components/admin/ConferenceManagement';
 import { OfflineManager } from './components/offline/OfflineManager';
-import PWAInstallPrompt from './components/common/PWAInstallPrompt';
 import { ErrorBoundary } from './utils/errorHandling';
 import GlobalNav from './components/common/GlobalNav';
 import { ToastContainer } from './components/common/Toast';
@@ -17,6 +16,7 @@ import { useTheme } from './hooks/useTheme';
 // Extracted pages
 import ViewerPage from './pages/ViewerPage';
 import EditorPage from './pages/EditorPage';
+import MasterStudioPage from './pages/MasterStudioPage';
 
 function AppRoutes() {
   return (
@@ -27,6 +27,7 @@ function AppRoutes() {
       <Route path="/viewer/:publicationId" element={<ViewerPage />} />
       <Route path="/mypage" element={<MyPage />} />
       <Route path="/editor/:publicationId" element={<EditorPage />} />
+      <Route path="/studio/:publicationId" element={<MasterStudioPage />} />
       <Route path="/admin" element={<ProtectedRoute><AdminDashboard /></ProtectedRoute>} />
       <Route path="/admin/conferences" element={<ProtectedRoute><ConferenceManagement /></ProtectedRoute>} />
       <Route path="/admin/branding" element={
@@ -61,7 +62,6 @@ function App() {
           <OfflineManager>
             <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
               <GlobalNav />
-              <PWAInstallPrompt />
               <AppRoutes />
               <ToastContainer />
             </div>

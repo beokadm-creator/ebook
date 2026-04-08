@@ -36,6 +36,25 @@ const assetsCollection = (publicationId: string) =>
 
 const MAX_BATCH_OPS = 400;
 
+const stripUndefinedDeep = <T,>(value: T): T => {
+  if (Array.isArray(value)) {
+    return value
+      .filter((item) => item !== undefined)
+      .map((item) => stripUndefinedDeep(item)) as T;
+  }
+
+  if (value && typeof value === 'object') {
+    return Object.entries(value as Record<string, unknown>).reduce<Record<string, unknown>>((acc, [key, entry]) => {
+      if (entry !== undefined) {
+        acc[key] = stripUndefinedDeep(entry);
+      }
+      return acc;
+    }, {}) as T;
+  }
+
+  return value;
+};
+
 export const loadPublishingDocument = async (publicationId: string) => {
   const [publicationSnap, metaSnap, pageSnaps, assetSnaps] = await Promise.all([
     getDoc(doc(db, 'publications', publicationId)),
@@ -110,9 +129,12 @@ export const savePublishingDocument = async (publicationId: string, documentStat
     toc: documentState.toc,
     updatedAt: new Date().toISOString(),
   };
+  const sanitizedMeta = stripUndefinedDeep(meta);
+  const sanitizedPages = documentState.pages.map((page) => stripUndefinedDeep(page));
+  const sanitizedAssets = documentState.assets.map((asset) => stripUndefinedDeep(asset));
 
   operations.push((batch) => {
-    batch.set(metaRef(publicationId), meta);
+    batch.set(metaRef(publicationId), sanitizedMeta);
   });
 
   const nextPageIds = new Set(documentState.pages.map((page) => page.id));
@@ -123,7 +145,7 @@ export const savePublishingDocument = async (publicationId: string, documentStat
       });
     }
   });
-  documentState.pages.forEach((page) => {
+  sanitizedPages.forEach((page) => {
     operations.push((batch) => {
       batch.set(doc(pagesCollection(publicationId), page.id), page);
     });
@@ -137,7 +159,7 @@ export const savePublishingDocument = async (publicationId: string, documentStat
       });
     }
   });
-  documentState.assets.forEach((asset) => {
+  sanitizedAssets.forEach((asset) => {
     operations.push((batch) => {
       batch.set(doc(assetsCollection(publicationId), asset.id), asset);
     });
@@ -149,7 +171,7 @@ export const savePublishingDocument = async (publicationId: string, documentStat
       {
         title: documentState.meta.title,
         status: documentState.meta.status,
-        editorUpdatedAt: meta.updatedAt,
+        editorUpdatedAt: sanitizedMeta.updatedAt,
         publishingVersion: documentState.version,
       },
       { merge: true },

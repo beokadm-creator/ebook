@@ -17,7 +17,8 @@ import {
   PresentationChartBarIcon,
   CloudArrowUpIcon,
   LinkIcon,
-  ArrowTopRightOnSquareIcon
+  ArrowTopRightOnSquareIcon,
+  RectangleStackIcon
 } from '@heroicons/react/24/outline';
 
 const PublicationManagement: React.FC = () => {
@@ -105,6 +106,10 @@ const PublicationManagement: React.FC = () => {
 
   const handleOpenEditor = (pubId: string) => {
     window.location.href = `/editor/${pubId}`;
+  };
+
+  const handleOpenStudio = (pubId: string) => {
+    window.location.href = `/studio/${pubId}`;
   };
 
   const handleViewViewer = (pubId: string) => {
@@ -196,7 +201,14 @@ const PublicationManagement: React.FC = () => {
                 </div>
 
                 {/* 주요 액션 버튼들 */}
-                <div className="grid grid-cols-2 gap-2 mb-4">
+                <div className="grid grid-cols-3 gap-2 mb-4">
+                  <button
+                    onClick={() => handleOpenStudio(pub.id!)}
+                    className="flex items-center justify-center gap-2 px-3 py-3 bg-slate-50 dark:bg-slate-700/60 text-slate-700 dark:text-slate-200 rounded-xl font-bold hover:bg-slate-900 hover:text-white transition-all text-sm"
+                  >
+                    <RectangleStackIcon className="w-5 h-5" />
+                    마스터
+                  </button>
                   <button
                     onClick={() => handleOpenEditor(pub.id!)}
                     className="flex items-center justify-center gap-2 px-3 py-3 bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400 rounded-xl font-bold hover:bg-blue-600 hover:text-white transition-all text-sm"

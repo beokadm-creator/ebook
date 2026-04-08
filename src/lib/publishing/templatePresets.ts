@@ -11,6 +11,7 @@ import {
 import { MasterTemplate } from '@/types/publishing';
 
 export type TemplatePresetKey =
+  | 'blank'
   | 'cover'
   | 'section-lead'
   | 'single-column'
@@ -19,27 +20,33 @@ export type TemplatePresetKey =
   | 'presentation-two-column';
 
 export const TEMPLATE_PRESET_LABELS: Record<TemplatePresetKey, string> = {
-  cover: '표지형',
-  'section-lead': '섹션 시작형',
-  'single-column': '일반 본문 1단',
-  'two-column': '구연발표 2단',
-  'poster-summary': '포스터 요약',
-  'presentation-two-column': '발표 확장 2단',
+  blank: '빈 템플릿',
+  cover: '표지',
+  'section-lead': '섹션',
+  'single-column': '1단',
+  'two-column': '2단',
+  'poster-summary': '포스터',
+  'presentation-two-column': '발표 2단',
 };
 
 export const TEMPLATE_PRESET_DESCRIPTIONS: Record<TemplatePresetKey, string> = {
-  cover: '표지용',
-  'section-lead': '섹션 시작용',
+  blank: '처음부터 구성',
+  cover: '표지',
+  'section-lead': '섹션 시작',
   'single-column': '기본 1단',
   'two-column': '기본 2단',
-  'poster-summary': '포스터 요약',
-  'presentation-two-column': '확장 2단',
+  'poster-summary': '포스터용',
+  'presentation-two-column': '발표용 2단',
 };
 
 export const applyPresetToMaster = (master: MasterTemplate, preset: TemplatePresetKey) => {
   const globalFixedDecorations = master.decorations.filter((decoration) => decoration.scope === 'global-fixed');
 
   switch (preset) {
+    case 'blank':
+      master.contentZones = [];
+      master.decorations = globalFixedDecorations;
+      break;
     case 'cover':
       master.contentZones = [createCoverZone()];
       master.decorations = [...globalFixedDecorations, ...createCoverPresetDecorations()];

@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { createInitialPublishingDocument, createMainBodyZone, getThreadPlainText } from '@/lib/publishing/defaultDocument';
+import { createImageZone, createInitialPublishingDocument, createMainBodyZone, getThreadPlainText } from '@/lib/publishing/defaultDocument';
 import { applyThreadPaginationSegments, PaginationSegmentPlacement, repaginateDocument } from '@/lib/publishing/pagination';
 import { applyPresetToMaster, TemplatePresetKey } from '@/lib/publishing/templatePresets';
 import {
@@ -15,6 +15,8 @@ interface PublishingStore extends PublishingEditorState {
   initialize: (document?: PublishingDocument) => void;
   selectPage: (pageId: string) => void;
   selectBlock: (pageId: string, zoneId: string, blockId: string) => void;
+  addPage: (masterId?: string) => void;
+  deletePage: (pageId: string) => void;
   createMaster: (name?: string, preset?: TemplatePresetKey) => void;
   duplicateMaster: (masterId: string) => void;
   deleteMaster: (masterId: string) => void;
@@ -37,6 +39,7 @@ interface PublishingStore extends PublishingEditorState {
       height: number;
       text: string;
       fill: string;
+      style: Partial<TypographyStyle>;
     }>,
   ) => void;
   updateGlobalMasterDecoration: (
@@ -62,7 +65,24 @@ interface PublishingStore extends PublishingEditorState {
       height: number;
     }>,
   ) => void;
+  updateMasterZoneStyle: (
+    masterId: string,
+    zoneId: string,
+    updates: Partial<TypographyStyle>,
+  ) => void;
+  updateMasterZoneMeta: (
+    masterId: string,
+    zoneId: string,
+    updates: Partial<{
+      name: string;
+      slotKey?: string;
+      flowGroupId?: string;
+      flowOrder?: number;
+      allowThreadContinuation?: boolean;
+    }>,
+  ) => void;
   addMasterTextDecoration: (masterId: string) => void;
+  addMasterShapeDecoration: (masterId: string) => void;
   addMasterImageDecoration: (
     masterId: string,
     image: {
@@ -75,6 +95,9 @@ interface PublishingStore extends PublishingEditorState {
   removeMasterDecoration: (masterId: string, decorationId: string) => void;
   toggleMasterDecorationLock: (masterId: string, decorationId: string) => void;
   toggleMasterZoneLock: (masterId: string, zoneId: string) => void;
+  addMasterTextZone: (masterId: string) => void;
+  addMasterImageZone: (masterId: string) => void;
+  removeMasterZone: (masterId: string, zoneId: string) => void;
   updateThreadText: (threadId: string, text: string) => void;
   updateThreadRuns: (threadId: string, runs: TextRun[]) => void;
   updateThreadRole: (threadId: string, role: TextRole) => void;
@@ -83,7 +106,9 @@ interface PublishingStore extends PublishingEditorState {
     updates: Partial<NonNullable<PublishingDocument['threads'][number]['styleOverride']>>,
   ) => void;
   toggleThreadToc: (threadId: string) => void;
+  deleteThread: (threadId: string) => void;
   addThread: (pageId: string, zoneId: string, role?: TextRole) => void;
+  addThreadWithText: (pageId: string, zoneId: string, text: string, role?: TextRole) => string | null;
   addImageBlock: (
     pageId: string,
     zoneId: string,
@@ -132,16 +157,187 @@ let autosaveTimer: number | null = null;
 const clone = <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
 const createId = (prefix: string) => `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+const FLOW_ROW_THRESHOLD_PX = 24;
+
+const sortFlowZonesForReadingOrder = <T extends { frame: { x: number; y: number } }>(zones: T[]) =>
+  [...zones].sort((left, right) => {
+    if (Math.abs(left.frame.y - right.frame.y) > FLOW_ROW_THRESHOLD_PX) {
+      return left.frame.y - right.frame.y;
+    }
+    return left.frame.x - right.frame.x;
+  });
+
+const inferZoneSlotKey = (zone?: { id: string; name?: string; kind?: string; slotKey?: string }) => {
+  if (!zone) {
+    return undefined;
+  }
+
+  if (zone.slotKey?.trim()) {
+    return zone.slotKey.trim();
+  }
+
+  const target = `${zone.id} ${zone.name ?? ''}`.toLowerCase();
+  if (target.includes('image')) return 'image';
+  if (target.includes('cover') || target.includes('title')) return 'title';
+  if (target.includes('section') && target.includes('header')) return 'section_title';
+  if (target.includes('intro') || target.includes('summary')) return 'summary';
+  return zone.kind === 'text-flow' ? 'body' : undefined;
+};
+
+const normalizeMasterFlowGroups = (master: PublishingDocument['masters']['items'][number]) => {
+  const flowGroups = new Map<string, PublishingDocument['masters']['items'][number]['contentZones']>();
+
+  master.contentZones.forEach((zone) => {
+    const inferredSlotKey = inferZoneSlotKey(zone);
+    if (inferredSlotKey && !zone.slotKey) {
+      zone.slotKey = inferredSlotKey;
+    }
+
+    if (!zone.flowGroupId) {
+      return;
+    }
+
+    const group = flowGroups.get(zone.flowGroupId) ?? [];
+    group.push(zone);
+    flowGroups.set(zone.flowGroupId, group);
+  });
+
+  flowGroups.forEach((zones, flowGroupId) => {
+    const slotKeys = Array.from(new Set(zones.map((zone) => inferZoneSlotKey(zone) ?? zone.id)));
+    if (slotKeys.length <= 1) {
+      return;
+    }
+
+    zones.forEach((zone) => {
+      const slotKey = inferZoneSlotKey(zone) ?? zone.id;
+      zone.flowGroupId = `${flowGroupId}:${slotKey}`;
+      zone.flowOrder = undefined;
+      if (slotKey !== 'body') {
+        zone.allowThreadContinuation = false;
+      }
+    });
+  });
+
+  const groupedZones = new Map<string, PublishingDocument['masters']['items'][number]['contentZones']>();
+  master.contentZones.forEach((zone) => {
+    if (!zone.flowGroupId) {
+      return;
+    }
+    const group = groupedZones.get(zone.flowGroupId) ?? [];
+    group.push(zone);
+    groupedZones.set(zone.flowGroupId, group);
+  });
+
+  groupedZones.forEach((zones) => {
+    sortFlowZonesForReadingOrder(zones).forEach((zone, index) => {
+      zone.flowOrder = index + 1;
+    });
+  });
+};
 
 const getPrimaryFlowZoneId = (document: PublishingDocument, masterId: string) => {
   const master = document.masters.items.find((item) => item.id === masterId);
   return (
-    master?.contentZones
-      .filter((zone) => zone.kind === 'text-flow')
-      .sort((left, right) => (left.flowOrder ?? 0) - (right.flowOrder ?? 0))[0]?.id
+    sortFlowZonesForReadingOrder(
+      master?.contentZones.filter((zone) => zone.kind === 'text-flow') ?? [],
+    )[0]?.id
     ?? master?.contentZones[0]?.id
     ?? null
   );
+};
+
+const getChainRootPageId = (document: PublishingDocument, pageId: string) => {
+  let currentPage = document.pages.find((page) => page.id === pageId);
+  while (currentPage?.derivedFrom?.reason === 'auto-pagination') {
+    const previousPage = document.pages.find((page) => page.id === currentPage?.derivedFrom?.previousPageId);
+    if (!previousPage) {
+      break;
+    }
+    currentPage = previousPage;
+  }
+  return currentPage?.id ?? pageId;
+};
+
+const getFlowStartZoneId = (document: PublishingDocument, masterId: string, zoneId: string) => {
+  const master = document.masters.items.find((item) => item.id === masterId);
+  const zone = master?.contentZones.find((item) => item.id === zoneId);
+  if (!master || !zone) {
+    return zoneId;
+  }
+
+  if (!zone.flowGroupId) {
+    return zone.id;
+  }
+
+  return (
+    sortFlowZonesForReadingOrder(
+      master.contentZones.filter((item) => item.kind === 'text-flow' && item.flowGroupId === zone.flowGroupId && item.allowThreadContinuation !== false),
+    )[0]?.id
+    ?? zone.id
+  );
+};
+
+const getThreadSlotKey = (document: PublishingDocument, thread: PublishingDocument['threads'][number]) => {
+  const sourcePage = document.pages.find((page) => page.id === thread.sourcePageId);
+  if (!sourcePage) {
+    return `${thread.sourcePageId}:zone:${thread.sourceZoneId}`;
+  }
+
+  const rootPageId = getChainRootPageId(document, sourcePage.id);
+  const master = document.masters.items.find((item) => item.id === sourcePage.masterId);
+  const sourceZone = master?.contentZones.find((zone) => zone.id === thread.sourceZoneId);
+  const inferredSlotKey = inferZoneSlotKey(sourceZone);
+  const slotKey = inferredSlotKey
+    ? `slot:${inferredSlotKey}`
+    : sourceZone?.flowGroupId
+      ? `group:${sourceZone.flowGroupId}`
+      : `zone:${thread.sourceZoneId}`;
+  return `${rootPageId}:${slotKey}`;
+};
+
+const findExistingThreadForSlot = (
+  document: PublishingDocument,
+  pageId: string,
+  zoneId: string,
+) => {
+  const page = document.pages.find((item) => item.id === pageId);
+  if (!page) {
+    return null;
+  }
+
+  const rootPageId = getChainRootPageId(document, pageId);
+  const master = document.masters.items.find((item) => item.id === page.masterId);
+  const resolvedZoneId = getFlowStartZoneId(document, page.masterId, zoneId);
+  const zone = master?.contentZones.find((item) => item.id === resolvedZoneId)
+    ?? master?.contentZones.find((item) => item.id === zoneId);
+  if (!zone) {
+    return null;
+  }
+
+  const slotKey = zone.flowGroupId ? `group:${zone.flowGroupId}` : `zone:${zone.id}`;
+  const inferredSlotKey = inferZoneSlotKey(zone);
+  const resolvedSlotKey = inferredSlotKey ? `slot:${inferredSlotKey}` : slotKey;
+  return document.threads.find((thread) => {
+    const threadPage = document.pages.find((item) => item.id === thread.sourcePageId);
+    if (!threadPage) {
+      return false;
+    }
+
+    const threadRootPageId = getChainRootPageId(document, thread.sourcePageId);
+    if (threadRootPageId !== rootPageId) {
+      return false;
+    }
+
+    const threadMaster = document.masters.items.find((item) => item.id === threadPage.masterId);
+    const threadZone = threadMaster?.contentZones.find((item) => item.id === thread.sourceZoneId);
+    const threadInferredSlotKey = inferZoneSlotKey(threadZone);
+    const threadSlotKey = threadInferredSlotKey
+      ? `slot:${threadInferredSlotKey}`
+      : threadZone?.flowGroupId
+        ? `group:${threadZone.flowGroupId}`
+        : `zone:${thread.sourceZoneId}`;
+    return threadSlotKey === resolvedSlotKey;
+  }) ?? null;
 };
 
 const renameZoneForMaster = (zone: PublishingDocument['masters']['items'][number]['contentZones'][number]) => ({
@@ -178,6 +374,74 @@ const findTextBlockByThreadId = (document: PublishingDocument, threadId: string)
   }
 
   return null;
+};
+
+const getZonesInSameFlowGroup = (
+  master: PublishingDocument['masters']['items'][number],
+  zone: PublishingDocument['masters']['items'][number]['contentZones'][number],
+) => {
+  if (!zone.flowGroupId) {
+    return [zone];
+  }
+
+  return master.contentZones.filter((item) => item.flowGroupId === zone.flowGroupId);
+};
+
+const mergeRuns = (runs: TextRun[]) => {
+  if (!runs.length) {
+    return [{ text: '' }] as TextRun[];
+  }
+
+  const merged: TextRun[] = [];
+  runs.forEach((run) => {
+    const previous = merged[merged.length - 1];
+    const sameMarks = JSON.stringify(previous?.marks ?? {}) === JSON.stringify(run.marks ?? {});
+    if (previous && sameMarks) {
+      previous.text += run.text;
+      return;
+    }
+    merged.push({ text: run.text, marks: run.marks ? { ...run.marks } : undefined });
+  });
+  return merged;
+};
+
+const trimThreadFromPage = (document: PublishingDocument, threadId: string, pageId: string) => {
+  const thread = document.threads.find((item) => item.id === threadId);
+  if (!thread) {
+    return false;
+  }
+
+  const allSegments = document.pages
+    .flatMap((page) =>
+      page.zones.flatMap((zone) =>
+        zone.blocks
+          .filter((block): block is Extract<typeof zone.blocks[number], { type: 'text' }> => block.type === 'text' && block.flow.sourceThreadId === threadId)
+          .map((block) => ({
+            pageId: page.id,
+            segmentIndex: block.flow.segmentIndex,
+            runs: block.content.runs,
+          })),
+      ),
+    )
+    .sort((left, right) => left.segmentIndex - right.segmentIndex);
+
+  const firstRemovedSegmentIndex = allSegments.find((segment) => segment.pageId === pageId)?.segmentIndex;
+  if (firstRemovedSegmentIndex === undefined) {
+    return false;
+  }
+
+  const keptRuns = allSegments
+    .filter((segment) => segment.segmentIndex < firstRemovedSegmentIndex)
+    .flatMap((segment) => segment.runs);
+
+  if (!keptRuns.length) {
+    document.threads = document.threads.filter((item) => item.id !== threadId);
+    return true;
+  }
+
+  thread.canonicalText = mergeRuns(keptRuns);
+  thread.zoneSequence = thread.zoneSequence.filter((item) => item.pageId !== pageId);
+  return true;
 };
 
 const syncTocFromThreads = (document: PublishingDocument) => {
@@ -223,6 +487,122 @@ const syncTocFromThreads = (document: PublishingDocument) => {
       ebookAnchor: tocId,
     });
   });
+};
+
+const sanitizePublishingDocument = (document: PublishingDocument): PublishingDocument => {
+  const nextDocument = clone(document);
+
+  nextDocument.masters.items = nextDocument.masters.items
+    .filter((master) => Boolean(master))
+    .map((master) => ({
+      ...master,
+      decorations: (master.decorations ?? []).filter((decoration) => Boolean(decoration)),
+      contentZones: (master.contentZones ?? []).filter((zone) => Boolean(zone?.id) && Boolean(zone?.frame)),
+    }));
+
+  nextDocument.masters.items.forEach((master) => {
+    normalizeMasterFlowGroups(master);
+  });
+
+  nextDocument.pages = nextDocument.pages
+    .filter((page) => Boolean(page))
+    .map((page) => {
+      const master = nextDocument.masters.items.find((item) => item.id === page.masterId);
+      const validZoneIds = new Set((master?.contentZones ?? []).map((zone) => zone.id));
+      const existingZones = (page.zones ?? []).filter((zone) => {
+        if (!zone) {
+          return false;
+        }
+
+        if (validZoneIds.has(zone.zoneId)) {
+          return true;
+        }
+
+        return (zone.blocks ?? []).some((block) => block?.type === 'image');
+      });
+
+      const masterZones = (master?.contentZones ?? []).map((zoneTemplate) => {
+        const matchedZone = existingZones.find((zone) => zone.zoneId === zoneTemplate.id);
+        return {
+          zoneId: zoneTemplate.id,
+          blocks: (matchedZone?.blocks ?? []).filter((block) => Boolean(block)),
+        };
+      });
+
+      const detachedImageZones = existingZones
+        .filter((zone) => !validZoneIds.has(zone.zoneId))
+        .map((zone) => ({
+          ...zone,
+          blocks: (zone.blocks ?? []).filter((block) => Boolean(block)),
+        }));
+
+      return {
+        ...page,
+        zones: [...masterZones, ...detachedImageZones],
+      };
+    });
+
+  nextDocument.threads = (nextDocument.threads ?? [])
+    .filter((thread) => Boolean(thread))
+    .map((thread) => {
+      const sourcePage = nextDocument.pages.find((page) => page.id === thread.sourcePageId);
+      if (!sourcePage) {
+        return thread;
+      }
+
+      const rootPageId = getChainRootPageId(nextDocument, sourcePage.id);
+      const normalizedSourceZoneId = getFlowStartZoneId(nextDocument, sourcePage.masterId, thread.sourceZoneId);
+      return {
+        ...thread,
+        sourcePageId: rootPageId,
+        sourceZoneId: normalizedSourceZoneId,
+        zoneSequence: [{ pageId: rootPageId, zoneId: normalizedSourceZoneId }],
+      };
+    });
+
+  nextDocument.threads.forEach((thread) => {
+    const sourcePage = nextDocument.pages.find((page) => page.id === thread.sourcePageId);
+    const master = sourcePage ? nextDocument.masters.items.find((item) => item.id === sourcePage.masterId) : null;
+    const sourceZone = master?.contentZones.find((zone) => zone.id === thread.sourceZoneId);
+    const sourceSlotKey = inferZoneSlotKey(sourceZone);
+
+    if (thread.semanticRole === 'paragraph' && sourceSlotKey && sourceSlotKey !== 'body') {
+      const bodyZone = sortFlowZonesForReadingOrder(master?.contentZones.filter((zone) => inferZoneSlotKey(zone) === 'body') ?? [])[0];
+      if (bodyZone) {
+        thread.sourceZoneId = bodyZone.id;
+        thread.zoneSequence = [{ pageId: thread.sourcePageId, zoneId: bodyZone.id }];
+      }
+    }
+  });
+  const mergedThreads = new Map<string, PublishingDocument['threads'][number]>();
+  nextDocument.threads.forEach((thread) => {
+    const slotKey = getThreadSlotKey(nextDocument, thread);
+    const existing = mergedThreads.get(slotKey);
+    if (!existing) {
+      mergedThreads.set(slotKey, thread);
+      return;
+    }
+
+    if (existing.canonicalText.length && thread.canonicalText.length) {
+      existing.canonicalText = [...existing.canonicalText, { text: '\n\n' }, ...thread.canonicalText];
+    } else if (thread.canonicalText.length) {
+      existing.canonicalText = [...existing.canonicalText, ...thread.canonicalText];
+    }
+  });
+  nextDocument.threads = Array.from(mergedThreads.values());
+  nextDocument.assets = (nextDocument.assets ?? []).filter((asset) => Boolean(asset));
+  nextDocument.toc.items = (nextDocument.toc.items ?? []).filter((item) => Boolean(item));
+
+  if (!nextDocument.threads.length) {
+    return nextDocument;
+  }
+
+  const repaginated = repaginateDocument(
+    nextDocument,
+    nextDocument.threads.map((thread) => thread.id),
+  );
+  syncTocFromThreads(repaginated);
+  return repaginated;
 };
 
 const pushHistoryEntry = (
@@ -283,9 +663,16 @@ export const usePublishingStore = create<PublishingStore>()((set) => ({
   ...createStoreState(),
 
   initialize: (document) =>
-    set(() => ({
-      ...createStoreState(document),
-    })),
+    set(() => {
+      const state = createStoreState(document ? sanitizePublishingDocument(document) : document);
+      return {
+        ...state,
+        pagination: {
+          ...state.pagination,
+          invalidatedThreadIds: state.document.threads.map((thread) => thread.id),
+        },
+      };
+    }),
 
   selectPage: (pageId) =>
     set((state) => ({
@@ -300,6 +687,143 @@ export const usePublishingStore = create<PublishingStore>()((set) => ({
     set(() => ({
       selection: { pageId, zoneId, blockId },
     })),
+
+  addPage: (masterId) =>
+    set((state) => {
+      const nextDocument = clone(state.document);
+      const currentPageMasterId = state.selection.pageId
+        ? nextDocument.pages.find((page) => page.id === state.selection.pageId)?.masterId
+        : null;
+      const resolvedMasterId = masterId ?? currentPageMasterId ?? nextDocument.masters.defaultMasterId;
+      const master = nextDocument.masters.items.find((item) => item.id === resolvedMasterId)
+        ?? nextDocument.masters.items.find((item) => item.id === nextDocument.masters.defaultMasterId)
+        ?? nextDocument.masters.items[0];
+      if (!master) {
+        return state;
+      }
+
+      const newPageId = createId('page');
+      const newPageNumber = nextDocument.pages.length + 1;
+      nextDocument.pages.push({
+        id: newPageId,
+        pageNumber: newPageNumber,
+        masterId: master.id,
+        pageRole: 'body',
+        derivedFrom: {
+          previousPageId: state.selection.pageId ?? nextDocument.pages.at(-1)?.id ?? newPageId,
+          reason: 'manual-duplicate',
+        },
+        zones: master.contentZones.map((zone) => ({
+          zoneId: zone.id,
+          blocks: [],
+        })),
+      });
+
+      nextDocument.meta.updatedAt = new Date().toISOString();
+      const next = pushHistoryEntry(state, `Add page ${newPageId}`, nextDocument);
+      return {
+        document: nextDocument,
+        selection: {
+          pageId: newPageId,
+          zoneId: master.contentZones[0]?.id ?? null,
+          blockId: null,
+        },
+        ...next,
+      };
+    }),
+
+  deletePage: (pageId) =>
+    set((state) => {
+      const nextDocument = clone(state.document);
+      const pageIndex = nextDocument.pages.findIndex((page) => page.id === pageId);
+      const page = nextDocument.pages[pageIndex];
+      if (!page || nextDocument.pages.length <= 1 || page.pageRole === 'cover') {
+        return state;
+      }
+
+      const pageThreadIds = new Set(
+        page.zones.flatMap((zone) =>
+          zone.blocks
+            .filter((block): block is Extract<typeof zone.blocks[number], { type: 'text' }> => block.type === 'text')
+            .map((block) => block.flow.sourceThreadId),
+        ),
+      );
+
+      if (page.derivedFrom?.reason === 'auto-pagination') {
+        const trimmedThreadIds: string[] = [];
+        pageThreadIds.forEach((threadId) => {
+          if (trimThreadFromPage(nextDocument, threadId, pageId)) {
+            trimmedThreadIds.push(threadId);
+          }
+        });
+
+        const repaginated = repaginateDocument(
+          nextDocument,
+          nextDocument.threads.map((thread) => thread.id),
+        );
+        syncTocFromThreads(repaginated);
+        repaginated.meta.updatedAt = new Date().toISOString();
+        const fallbackPage =
+          repaginated.pages
+            .filter((candidate) => candidate.pageNumber < page.pageNumber)
+            .at(-1)
+          ?? repaginated.pages[0];
+        const next = pushHistoryEntry(state, `Trim overflow page ${pageId}`, repaginated);
+
+        return {
+          document: repaginated,
+          selection: {
+            pageId: fallbackPage?.id ?? null,
+            zoneId: fallbackPage?.zones[0]?.zoneId ?? null,
+            blockId: null,
+          },
+          pagination: {
+            ...state.pagination,
+            invalidatedThreadIds: state.pagination.invalidatedThreadIds.filter((id) => !trimmedThreadIds.includes(id)),
+          },
+          ...next,
+        };
+      }
+
+      nextDocument.pages.splice(pageIndex, 1);
+      nextDocument.pages = nextDocument.pages.map((item, index) => ({
+        ...item,
+        pageNumber: index + 1,
+      }));
+
+      const invalidatedThreadIds = new Set<string>(state.pagination.invalidatedThreadIds);
+      nextDocument.threads = nextDocument.threads.filter((thread) => {
+        if (thread.sourcePageId === pageId) {
+          return false;
+        }
+
+        const hadSegmentOnPage = thread.zoneSequence.some((item) => item.pageId === pageId);
+        if (hadSegmentOnPage || pageThreadIds.has(thread.id)) {
+          thread.zoneSequence = thread.zoneSequence.filter((item) => item.pageId !== pageId);
+          invalidatedThreadIds.add(thread.id);
+        }
+        return true;
+      });
+
+      syncTocFromThreads(nextDocument);
+      nextDocument.meta.updatedAt = new Date().toISOString();
+      const fallbackPage = nextDocument.pages[Math.max(0, pageIndex - 1)] ?? nextDocument.pages[0];
+      const next = pushHistoryEntry(state, `Delete page ${pageId}`, nextDocument);
+
+      return {
+        document: nextDocument,
+        selection: {
+          pageId: fallbackPage?.id ?? null,
+          zoneId: fallbackPage?.zones[0]?.zoneId ?? null,
+          blockId: null,
+        },
+        pagination: {
+          ...state.pagination,
+          invalidatedThreadIds: Array.from(invalidatedThreadIds),
+        },
+        ...next,
+      };
+    }),
 
   createMaster: (name, preset = 'single-column') =>
     set((state) => {
@@ -664,7 +1188,14 @@ export const usePublishingStore = create<PublishingStore>()((set) => ({
         return state;
       }
 
-      Object.assign(decoration, updates);
+      const { style, ...restUpdates } = updates;
+      Object.assign(decoration, restUpdates);
+      if (style) {
+        decoration.style = {
+          ...(decoration.style ?? {}),
+          ...style,
+        };
+      }
       nextDocument.meta.updatedAt = new Date().toISOString();
       const next = pushHistoryEntry(state, `Update decoration ${decorationId}`, nextDocument);
       return {
@@ -712,12 +1243,136 @@ export const usePublishingStore = create<PublishingStore>()((set) => ({
         ...zone.frame,
         ...updates,
       };
+      getZonesInSameFlowGroup(master, zone)
+        .filter((item) => item.id !== zone.id)
+        .forEach((siblingZone) => {
+          siblingZone.frame = {
+            ...siblingZone.frame,
+            ...(updates.y !== undefined ? { y: zone.frame.y } : {}),
+            ...(updates.width !== undefined ? { width: zone.frame.width } : {}),
+            ...(updates.height !== undefined ? { height: zone.frame.height } : {}),
+          };
+        });
       nextDocument.meta.updatedAt = new Date().toISOString();
       const next = pushHistoryEntry(state, `Update zone frame ${zoneId}`, nextDocument);
       const invalidatedThreadIds = Array.from(
         new Set(
           nextDocument.threads
-            .filter((thread) => thread.sourceZoneId === zoneId)
+            .filter((thread) => {
+              const threadPage = nextDocument.pages.find((page) => page.id === thread.sourcePageId);
+              const threadMaster = threadPage ? nextDocument.masters.items.find((item) => item.id === threadPage.masterId) : null;
+              const threadZone = threadMaster?.contentZones.find((item) => item.id === thread.sourceZoneId);
+              return threadZone?.flowGroupId
+                ? threadZone.flowGroupId === zone.flowGroupId
+                : thread.sourceZoneId === zoneId;
+            })
+            .map((thread) => thread.id)
+            .concat(state.pagination.invalidatedThreadIds),
+        ),
+      );
+
+      return {
+        document: nextDocument,
+        pagination: {
+          ...state.pagination,
+          invalidatedThreadIds,
+        },
+        ...next,
+      };
+    }),
+
+  updateMasterZoneStyle: (masterId, zoneId, updates) =>
+    set((state) => {
+      const nextDocument = clone(state.document);
+      const master = nextDocument.masters.items.find((item) => item.id === masterId);
+      const zone = master?.contentZones.find((item) => item.id === zoneId);
+      if (!master || !zone || zone.scope === 'global-fixed' || zone.locked) {
+        return state;
+      }
+
+      getZonesInSameFlowGroup(master, zone).forEach((groupZone) => {
+        groupZone.style = {
+          ...groupZone.style,
+          ...updates,
+        };
+      });
+      nextDocument.meta.updatedAt = new Date().toISOString();
+      const next = pushHistoryEntry(state, `Update zone style ${zoneId}`, nextDocument);
+      const invalidatedThreadIds = Array.from(
+        new Set(
+          nextDocument.threads
+            .filter((thread) => {
+              const threadPage = nextDocument.pages.find((page) => page.id === thread.sourcePageId);
+              const threadMaster = threadPage ? nextDocument.masters.items.find((item) => item.id === threadPage.masterId) : null;
+              const threadZone = threadMaster?.contentZones.find((item) => item.id === thread.sourceZoneId);
+              return threadZone?.flowGroupId
+                ? threadZone.flowGroupId === zone.flowGroupId
+                : thread.sourceZoneId === zoneId;
+            })
+            .map((thread) => thread.id)
+            .concat(state.pagination.invalidatedThreadIds),
+        ),
+      );
+
+      return {
+        document: nextDocument,
+        pagination: {
+          ...state.pagination,
+          invalidatedThreadIds,
+        },
+        ...next,
+      };
+    }),
+
+  updateMasterZoneMeta: (masterId, zoneId, updates) =>
+    set((state) => {
+      const nextDocument = clone(state.document);
+      const master = nextDocument.masters.items.find((item) => item.id === masterId);
+      const zone = master?.contentZones.find((item) => item.id === zoneId);
+      if (!master || !zone || zone.scope === 'global-fixed' || zone.locked) {
+        return state;
+      }
+
+      if (typeof updates.name === 'string' && updates.name.trim()) {
+        zone.name = updates.name.trim();
+      }
+      if ('slotKey' in updates) {
+        zone.slotKey = updates.slotKey?.trim() || undefined;
+      }
+      if ('flowGroupId' in updates) {
+        zone.flowGroupId = updates.flowGroupId?.trim() || undefined;
+      }
+      if ('flowOrder' in updates) {
+        zone.flowOrder = updates.flowOrder ? Math.max(1, updates.flowOrder) : undefined;
+      }
+      if ('allowThreadContinuation' in updates && typeof updates.allowThreadContinuation === 'boolean') {
+        zone.allowThreadContinuation = updates.allowThreadContinuation;
+      }
+
+      getZonesInSameFlowGroup(master, zone)
+        .filter((item) => item.id !== zone.id)
+        .forEach((groupZone) => {
+          if ('slotKey' in updates) {
+            groupZone.slotKey = zone.slotKey;
+          }
+          if ('allowThreadContinuation' in updates && typeof updates.allowThreadContinuation === 'boolean') {
+            groupZone.allowThreadContinuation = zone.allowThreadContinuation;
+          }
+        });
+
+      nextDocument.meta.updatedAt = new Date().toISOString();
+      const next = pushHistoryEntry(state, `Update zone meta ${zoneId}`, nextDocument);
+      const invalidatedThreadIds = Array.from(
+        new Set(
+          nextDocument.threads
+            .filter((thread) => {
+              const threadPage = nextDocument.pages.find((page) => page.id === thread.sourcePageId);
+              const threadMaster = threadPage ? nextDocument.masters.items.find((item) => item.id === threadPage.masterId) : null;
+              const threadZone = threadMaster?.contentZones.find((item) => item.id === thread.sourceZoneId);
+              return threadZone?.flowGroupId
+                ? threadZone.flowGroupId === zone.flowGroupId
+                : thread.sourceZoneId === zoneId;
+            })
             .map((thread) => thread.id)
             .concat(state.pagination.invalidatedThreadIds),
         ),
@@ -754,6 +1409,34 @@ export const usePublishingStore = create<PublishingStore>()((set) => ({
       });
       nextDocument.meta.updatedAt = new Date().toISOString();
       const next = pushHistoryEntry(state, `Add master text decoration ${masterId}`, nextDocument);
+      return {
+        document: nextDocument,
+        ...next,
+      };
+    }),
+
+  addMasterShapeDecoration: (masterId) =>
+    set((state) => {
+      const nextDocument = clone(state.document);
+      const master = nextDocument.masters.items.find((item) => item.id === masterId);
+      if (!master || master.locked) {
+        return state;
+      }
+
+      master.decorations.push({
+        id: `decoration_${Date.now()}`,
+        type: 'shape',
+        locked: false,
+        scope: 'template-fixed',
+        x: 72,
+        y: 120,
+        width: 220,
+        height: 2,
+        shape: 'line',
+        fill: '#cbd5e1',
+      });
+      nextDocument.meta.updatedAt = new Date().toISOString();
+      const next = pushHistoryEntry(state, `Add master shape decoration ${masterId}`, nextDocument);
       return {
         document: nextDocument,
         ...next,
@@ -845,6 +1528,105 @@ export const usePublishingStore = create<PublishingStore>()((set) => ({
       zone.locked = !zone.locked;
       nextDocument.meta.updatedAt = new Date().toISOString();
       const next = pushHistoryEntry(state, `Toggle zone lock ${zoneId}`, nextDocument);
+      return {
+        document: nextDocument,
+        ...next,
+      };
+    }),
+
+  addMasterTextZone: (masterId) =>
+    set((state) => {
+      const nextDocument = clone(state.document);
+      const master = nextDocument.masters.items.find((item) => item.id === masterId);
+      if (!master || master.locked) {
+        return state;
+      }
+
+      const newZone = {
+        ...createMainBodyZone(),
+        id: createId('zone'),
+        name: `Text Zone ${master.contentZones.filter((zone) => zone.kind === 'text-flow').length + 1}`,
+        flowGroupId: undefined,
+        flowOrder: undefined,
+        frame: {
+          x: 72,
+          y: 120 + master.contentZones.length * 24,
+          width: 300,
+          height: 180,
+        },
+      };
+
+      master.contentZones.push(newZone);
+      nextDocument.pages.forEach((page) => {
+        if (page.masterId === masterId && !page.zones.some((zone) => zone.zoneId === newZone.id)) {
+          page.zones.push({ zoneId: newZone.id, blocks: [] });
+        }
+      });
+      nextDocument.meta.updatedAt = new Date().toISOString();
+      const next = pushHistoryEntry(state, `Add master text zone ${masterId}`, nextDocument);
+      return {
+        document: nextDocument,
+        ...next,
+      };
+    }),
+
+  addMasterImageZone: (masterId) =>
+    set((state) => {
+      const nextDocument = clone(state.document);
+      const master = nextDocument.masters.items.find((item) => item.id === masterId);
+      if (!master || master.locked) {
+        return state;
+      }
+
+      const newZone = {
+        ...createImageZone(`Image Zone ${master.contentZones.filter((zone) => zone.kind === 'media-freeform').length + 1}`),
+        id: createId('zone'),
+        frame: {
+          x: 390,
+          y: 120 + master.contentZones.length * 24,
+          width: 220,
+          height: 180,
+        },
+      };
+
+      master.contentZones.push(newZone);
+      nextDocument.pages.forEach((page) => {
+        if (page.masterId === masterId && !page.zones.some((zone) => zone.zoneId === newZone.id)) {
+          page.zones.push({ zoneId: newZone.id, blocks: [] });
+        }
+      });
+      nextDocument.meta.updatedAt = new Date().toISOString();
+      const next = pushHistoryEntry(state, `Add master image zone ${masterId}`, nextDocument);
+      return {
+        document: nextDocument,
+        ...next,
+      };
+    }),
+
+  removeMasterZone: (masterId, zoneId) =>
+    set((state) => {
+      const nextDocument = clone(state.document);
+      const master = nextDocument.masters.items.find((item) => item.id === masterId);
+      if (!master || master.contentZones.length <= 1) {
+        return state;
+      }
+
+      const hasContent = nextDocument.pages.some((page) =>
+        page.masterId === masterId && page.zones.some((zone) => zone.zoneId === zoneId && zone.blocks.length > 0),
+      );
+      if (hasContent) {
+        return state;
+      }
+
+      master.contentZones = master.contentZones.filter((zone) => zone.id !== zoneId);
+      nextDocument.pages.forEach((page) => {
+        if (page.masterId === masterId) {
+          page.zones = page.zones.filter((zone) => zone.zoneId !== zoneId);
+        }
+      });
+
+      nextDocument.meta.updatedAt = new Date().toISOString();
+      const next = pushHistoryEntry(state, `Remove master zone ${zoneId}`, nextDocument);
       return {
         document: nextDocument,
         ...next,
@@ -999,15 +1781,78 @@ export const usePublishingStore = create<PublishingStore>()((set) => ({
       };
     }),
 
+  deleteThread: (threadId) =>
+    set((state) => {
+      const nextDocument = clone(state.document);
+      const threadExists = nextDocument.threads.some((item) => item.id === threadId);
+      if (!threadExists) {
+        return state;
+      }
+
+      nextDocument.threads = nextDocument.threads.filter((item) => item.id !== threadId);
+      const repaginated = repaginateDocument(nextDocument, nextDocument.threads.map((thread) => thread.id));
+      syncTocFromThreads(repaginated);
+      repaginated.meta.updatedAt = new Date().toISOString();
+      const next = pushHistoryEntry(state, `Delete thread ${threadId}`, repaginated);
+
+      return {
+        document: repaginated,
+        selection:
+          state.selection.blockId && state.document.pages.some((page) =>
+            page.zones.some((zone) =>
+              zone.blocks.some((block) => block.id === state.selection.blockId && block.type === 'text' && block.flow.sourceThreadId === threadId),
+            ),
+          )
+            ? {
+                pageId: state.selection.pageId,
+                zoneId: state.selection.zoneId,
+                blockId: null,
+              }
+            : state.selection,
+        ...next,
+      };
+    }),
+
   addThread: (pageId, zoneId, role = 'paragraph') =>
     set((state) => {
       const nextDocument = clone(state.document);
       const newThreadId = `thread_${Date.now()}`;
       const newBlockId = `${newThreadId}_seg_000`;
       const page = nextDocument.pages.find((item) => item.id === pageId);
-      const zone = page?.zones.find((item) => item.zoneId === zoneId);
-      if (!page || !zone) {
+      if (!page) {
         return state;
+      }
+      const rootPageId = getChainRootPageId(nextDocument, pageId);
+      const rootPage = nextDocument.pages.find((item) => item.id === rootPageId) ?? page;
+      const resolvedZoneId = getFlowStartZoneId(nextDocument, rootPage.masterId, zoneId);
+      const zone = rootPage.zones.find((item) => item.zoneId === resolvedZoneId) ?? rootPage.zones.find((item) => item.zoneId === zoneId);
+      if (!zone) {
+        return state;
+      }
+
+      const existingThread = findExistingThreadForSlot(nextDocument, rootPage.id, zone.zoneId);
+      if (existingThread) {
+        existingThread.canonicalText = [{ text: role === 'heading' ? '새 섹션 제목' : '새 문단을 입력하세요.' }];
+        existingThread.styleOverride = getRoleStyleOverride(role);
+        existingThread.semanticRole = role;
+        syncTocFromThreads(nextDocument);
+        nextDocument.meta.updatedAt = new Date().toISOString();
+        const next = pushHistoryEntry(state, `Reset thread ${existingThread.id}`, nextDocument);
+        const invalidatedThreadIds = Array.from(new Set([...state.pagination.invalidatedThreadIds, existingThread.id]));
+
+        return {
+          document: nextDocument,
+          selection: {
+            pageId: rootPage.id,
+            zoneId: zone.zoneId,
+            blockId: existingThread.originBlockId,
+          },
+          pagination: {
+            ...state.pagination,
+            invalidatedThreadIds,
+          },
+          ...next,
+        };
       }
 
       nextDocument.threads.push({
@@ -1023,9 +1868,9 @@ export const usePublishingStore = create<PublishingStore>()((set) => ({
           },
         },
         originBlockId: newBlockId,
-        sourceZoneId: zoneId,
-        sourcePageId: pageId,
-        zoneSequence: [{ pageId, zoneId }],
+        sourceZoneId: zone.zoneId,
+        sourcePageId: rootPage.id,
+        zoneSequence: [{ pageId: rootPage.id, zoneId: zone.zoneId }],
       });
 
       const invalidatedThreadIds = Array.from(new Set([...state.pagination.invalidatedThreadIds, newThreadId]));
@@ -1039,21 +1884,131 @@ export const usePublishingStore = create<PublishingStore>()((set) => ({
           ...state.pagination,
           invalidatedThreadIds,
         },
+        selection: {
+          pageId: rootPage.id,
+          zoneId: zone.zoneId,
+          blockId: newBlockId,
+        },
         ...next,
       };
     }),
+
+  addThreadWithText: (pageId, zoneId, text, role = 'paragraph') => {
+    const trimmedText = text.trim();
+    if (!trimmedText) {
+      return null;
+    }
+
+    const newThreadId = `thread_${Date.now()}`;
+
+    set((state) => {
+      const nextDocument = clone(state.document);
+      const newBlockId = `${newThreadId}_seg_000`;
+      const page = nextDocument.pages.find((item) => item.id === pageId);
+      if (!page) {
+        return state;
+      }
+      const rootPageId = getChainRootPageId(nextDocument, pageId);
+      const rootPage = nextDocument.pages.find((item) => item.id === rootPageId) ?? page;
+      const resolvedZoneId = getFlowStartZoneId(nextDocument, rootPage.masterId, zoneId);
+      const zone = rootPage.zones.find((item) => item.zoneId === resolvedZoneId) ?? rootPage.zones.find((item) => item.zoneId === zoneId);
+      if (!zone) {
+        return state;
+      }
+
+      const existingThread = findExistingThreadForSlot(nextDocument, rootPage.id, zone.zoneId);
+      if (existingThread) {
+        existingThread.canonicalText = [{ text: trimmedText }];
+        existingThread.styleOverride = getRoleStyleOverride(role);
+        existingThread.semanticRole = role;
+        syncTocFromThreads(nextDocument);
+        nextDocument.meta.updatedAt = new Date().toISOString();
+        const next = pushHistoryEntry(state, `Replace thread ${existingThread.id}`, nextDocument);
+        const invalidatedThreadIds = Array.from(new Set([...state.pagination.invalidatedThreadIds, existingThread.id]));
+
+        return {
+          document: nextDocument,
+          selection: {
+            pageId: rootPage.id,
+            zoneId: zone.zoneId,
+            blockId: existingThread.originBlockId,
+          },
+          pagination: {
+            ...state.pagination,
+            invalidatedThreadIds,
+          },
+          ...next,
+        };
+      }
+
+      nextDocument.threads.push({
+        id: newThreadId,
+        type: 'text-flow',
+        canonicalText: [{ text: trimmedText }],
+        semanticRole: role,
+        styleOverride: getRoleStyleOverride(role),
+        ebook: {
+          include: true,
+          toc: {
+            enabled: role === 'heading' || role === 'subheading',
+          },
+        },
+        originBlockId: newBlockId,
+        sourceZoneId: zone.zoneId,
+        sourcePageId: rootPage.id,
+        zoneSequence: [{ pageId: rootPage.id, zoneId: zone.zoneId }],
+      });
+
+      const invalidatedThreadIds = Array.from(new Set([...state.pagination.invalidatedThreadIds, newThreadId]));
+      syncTocFromThreads(nextDocument);
+      nextDocument.meta.updatedAt = new Date().toISOString();
+      const next = pushHistoryEntry(state, `Add thread ${newThreadId}`, nextDocument);
+
+      return {
+        document: nextDocument,
+        selection: {
+          pageId: rootPage.id,
+          zoneId: zone.zoneId,
+          blockId: newBlockId,
+        },
+        pagination: {
+          ...state.pagination,
+          invalidatedThreadIds,
+        },
+        ...next,
+      };
+    });
+
+    return newThreadId;
+  },
 
   addImageBlock: (pageId, zoneId, image) =>
     set((state) => {
       const nextDocument = clone(state.document);
       const page = nextDocument.pages.find((item) => item.id === pageId);
       const zone = page?.zones.find((item) => item.zoneId === zoneId);
-      if (!page || !zone) {
+      const master = page ? nextDocument.masters.items.find((item) => item.id === page.masterId) : null;
+      const zoneTemplate = master?.contentZones.find((item) => item.id === zoneId);
+      if (!page || !zone || !zoneTemplate?.frame) {
         return state;
       }
 
       const assetId = `asset_${Date.now()}`;
       const blockId = `image_${Date.now()}`;
+      const maxWidth = Math.max(80, zoneTemplate.frame.width);
+      const maxHeight = Math.max(80, zoneTemplate.frame.height);
+      const aspectRatio = image.naturalWidth / image.naturalHeight || 1;
+      let width = Math.min(maxWidth, image.naturalWidth);
+      let height = width / aspectRatio;
+
+      if (height > maxHeight) {
+        height = maxHeight;
+        width = height * aspectRatio;
+      }
+
+      width = Math.min(width, maxWidth);
+      height = Math.min(height, maxHeight);
+
       nextDocument.assets.push({
         id: assetId,
         type: 'image',
@@ -1071,10 +2026,10 @@ export const usePublishingStore = create<PublishingStore>()((set) => ({
         scope: 'page-editable',
         visible: true,
         placement: {
-          x: 80,
-          y: 120,
-          width: 320,
-          height: 220,
+          x: Math.max(0, (zoneTemplate.frame.width - width) / 2),
+          y: Math.max(0, (zoneTemplate.frame.height - height) / 2),
+          width,
+          height,
           zIndex: 10,
           rotation: 0,
         },

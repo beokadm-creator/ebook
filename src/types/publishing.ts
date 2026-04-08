@@ -91,6 +91,7 @@ export interface DecorationElement {
 export interface ContentZoneTemplate {
   id: string;
   name: string;
+  slotKey?: string;
   kind: ZoneKind;
   locked: boolean;
   scope: ElementScope;
