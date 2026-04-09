@@ -30,15 +30,6 @@ function AppRoutes() {
       <Route path="/studio/:publicationId" element={<MasterStudioPage />} />
       <Route path="/admin" element={<ProtectedRoute><AdminDashboard /></ProtectedRoute>} />
       <Route path="/admin/conferences" element={<ProtectedRoute><ConferenceManagement /></ProtectedRoute>} />
-      <Route path="/admin/branding" element={
-        <ProtectedRoute>
-          <div className="container mx-auto px-4 py-8">
-            <h1 className="text-3xl font-bold text-gray-900 dark:text-gray-100 mb-8">
-              브랜딩 설정은 학술대회 관리에서 각 학술대회별로 설정할 수 있습니다.
-            </h1>
-          </div>
-        </ProtectedRoute>
-      } />
       <Route path="*" element={
         <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900 px-4">
           <div className="text-center">

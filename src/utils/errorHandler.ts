@@ -1,11 +1,11 @@
-export interface AppError {
+interface AppError {
   code: string;
   message: string;
   statusCode: number;
   isOperational: boolean;
 }
 
-export class CustomError extends Error implements AppError {
+class CustomError extends Error implements AppError {
   constructor(
     public code: string,
     public statusCode: number,
@@ -18,7 +18,7 @@ export class CustomError extends Error implements AppError {
   }
 }
 
-export const FIREBASE_ERROR_CODES: Record<string, AppError> = {
+const FIREBASE_ERROR_CODES: Record<string, AppError> = {
   'unauthenticated': {
     code: 'AUTH_001',
     message: '로그인이 필요합니다.',
@@ -124,7 +124,7 @@ export function parseFirebaseError(error: unknown): AppError {
 
   if (error instanceof Error) {
     const firebaseCode = error instanceof Error && 'code' in error ? (error as { code: string }).code : undefined;
-    
+
     if (firebaseCode && FIREBASE_ERROR_CODES[firebaseCode]) {
       return FIREBASE_ERROR_CODES[firebaseCode];
     }
@@ -145,54 +145,23 @@ export function parseFirebaseError(error: unknown): AppError {
   };
 }
 
-export function getUserFriendlyMessage(error: AppError): string {
-  return error.message;
-}
-
-export function isOperationalError(error: unknown): boolean {
-  const parsedError = parseFirebaseError(error);
-  return parsedError.isOperational;
-}
-
 export function logError(error: unknown, context?: string): void {
   const parsedError = parseFirebaseError(error);
-  
+
   console.group(`🚨 Error ${context ? `in ${context}` : ''}`);
   console.error(`Code: ${parsedError.code}`);
   console.error(`Message: ${parsedError.message}`);
   console.error(`Status: ${parsedError.statusCode}`);
   console.error(`Operational: ${parsedError.isOperational}`);
-  
+
   if (error instanceof Error && error.stack) {
     console.error(`Stack:`, error.stack);
   }
-  
+
   console.groupEnd();
 }
 
-export function handleAsyncError<T>(
-  promise: Promise<T>,
-  context?: string
-): Promise<T> {
-  return promise.catch((error) => {
-    logError(error, context);
-    throw parseFirebaseError(error);
-  });
-}
-
-export function createErrorResponse(error: AppError): {
-  code: string;
-  message: string;
-  statusCode: number;
-} {
-  return {
-    code: error.code,
-    message: error.message,
-    statusCode: error.statusCode
-  };
-}
-
-export const DEFAULT_ERROR_MESSAGE = '일시적인 오류가 발생했습니다. 잠시 후 다시 시도해주세요.';
+const DEFAULT_ERROR_MESSAGE = '일시적인 오류가 발생했습니다. 잠시 후 다시 시도해주세요.';
 
 export function getSafeErrorMessage(error: unknown): string {
   try {
