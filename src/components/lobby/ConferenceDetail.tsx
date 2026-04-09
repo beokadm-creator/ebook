@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { doc, getDoc, collection, getDocs, query, where } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
-import { Conference, Publication, TOCItem, BilingualValue } from '@/types/content';
+import { Conference, Publication, BilingualValue } from '@/types/content';
 import { useBrandingStore } from '@/stores/brandingStore';
 import { useI18nStore } from '@/stores/i18nStore';
 import { 
@@ -13,21 +13,99 @@ import {
   UserGroupIcon,
   PlayIcon,
   DocumentTextIcon,
-  ChevronRightIcon
+  AcademicCapIcon,
 } from '@heroicons/react/24/outline';
+
+interface PublicationCardProps {
+  publication: Publication;
+  formatDate: (v: any) => string;
+  getLocalText: (v: any) => string;
+  getPublicationTypeLabel: (v: string) => string;
+}
+
+const PublicationCard: React.FC<PublicationCardProps> = ({ 
+  publication, 
+  formatDate, 
+  getLocalText,
+  getPublicationTypeLabel 
+}) => {
+  return (
+    <div className="group bg-white/80 dark:bg-slate-900/80 backdrop-blur-md rounded-[2.5rem] overflow-hidden border border-slate-200/60 dark:border-slate-800 shadow-lg shadow-slate-200/20 dark:shadow-none p-2 transition-all duration-300 hover:shadow-2xl hover:shadow-blue-900/5 hover:-translate-y-1 flex flex-col md:flex-row relative">
+      <div className="md:w-72 flex-shrink-0 bg-slate-100 dark:bg-slate-800/50 rounded-[2rem] overflow-hidden relative group-hover:bg-blue-50 dark:group-hover:bg-blue-900/20 transition-colors">
+        {publication.coverImage ? (
+          <img
+            src={publication.coverImage}
+            alt={getLocalText(publication.title)}
+            className="w-full h-full object-cover aspect-[3/4] md:aspect-[3/4] group-hover:scale-105 transition-transform duration-500"
+          />
+        ) : (
+          <div className="aspect-[3/4] md:h-full flex flex-col items-center justify-center p-8 text-center text-slate-400 dark:text-slate-500">
+             <DocumentTextIcon className="w-16 h-16 mb-4 opacity-50" />
+             <span className="text-xs font-black uppercase tracking-widest bg-white/50 dark:bg-slate-900/50 px-3 py-1.5 rounded-full">{getPublicationTypeLabel(publication.type)}</span>
+          </div>
+        )}
+        <div className="absolute inset-0 bg-slate-900/5 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+           <div className="w-16 h-16 bg-white/90 backdrop-blur-sm rounded-full flex items-center justify-center shadow-2xl transform scale-90 group-hover:scale-100 transition-transform duration-300">
+              <PlayIcon className="w-8 h-8 text-blue-600 ml-1" />
+           </div>
+        </div>
+      </div>
+
+      <div className="flex-1 p-6 md:p-10 flex flex-col justify-between">
+        <div>
+          <div className="flex items-center gap-3 mb-6">
+            <span className="text-xs font-black text-blue-600 dark:text-blue-400 uppercase tracking-widest px-3 py-1.5 bg-blue-50 dark:bg-blue-900/30 rounded-full border border-blue-100 dark:border-blue-800">
+              {getPublicationTypeLabel(publication.type)}
+            </span>
+            {publication.status === 'published' && (
+              <span className="flex items-center gap-1.5 text-[10px] font-black text-emerald-600 dark:text-emerald-400 uppercase tracking-widest">
+                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                 PUBLISHED
+              </span>
+            )}
+          </div>
+
+          <h3 className="text-3xl md:text-4xl font-black text-slate-900 dark:text-white mb-6 leading-[1.1] group-hover:text-transparent group-hover:bg-clip-text group-hover:bg-gradient-to-r group-hover:from-blue-600 group-hover:to-indigo-500 transition-all duration-300">
+            {getLocalText(publication.title)}
+          </h3>
+
+          <div className="flex flex-wrap items-center gap-6 text-sm text-slate-500 dark:text-slate-400 font-bold mb-8">
+             <div className="flex items-center gap-2 bg-slate-50 dark:bg-slate-800/50 px-3 py-1.5 rounded-lg border border-slate-100 dark:border-slate-800">
+                <CalendarIcon className="w-4 h-4 text-slate-400" />
+                <span>{formatDate(publication.publishedAt)}</span>
+             </div>
+             {publication.articles && publication.articles.length > 0 && (
+               <div className="flex items-center gap-2 bg-slate-50 dark:bg-slate-800/50 px-3 py-1.5 rounded-lg border border-slate-100 dark:border-slate-800">
+                  <BookOpenIcon className="w-4 h-4 text-slate-400" />
+                  <span>{publication.articles.length} 발표자료</span>
+               </div>
+             )}
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-4 mt-auto">
+          <Link
+            to={`/viewer/${publication.id}`}
+            className="inline-flex w-full md:w-auto justify-center items-center gap-3 bg-slate-900 dark:bg-white text-white dark:text-slate-900 font-black px-10 py-5 rounded-[1.25rem] hover:bg-blue-600 dark:hover:bg-blue-500 hover:text-white transition-all duration-300 shadow-xl shadow-slate-900/10 active:scale-95 group-hover:shadow-blue-600/20"
+          >
+            <PlayIcon className="w-6 h-6" />
+            <span className="tracking-wide">E-BOOK 화면으로 열람하기</span>
+          </Link>
+        </div>
+      </div>
+    </div>
+  );
+};
 
 const ConferenceDetail: React.FC = () => {
   const { conferenceId } = useParams<{ conferenceId: string }>();
   const [conference, setConference] = useState<Conference | null>(null);
   const [publications, setPublications] = useState<Publication[]>([]);
-  const [selectedPublication, setSelectedPublication] = useState<Publication | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
   const setBranding = useBrandingStore((state) => state.setBranding);
   const clearBranding = useBrandingStore((state) => state.clearBranding);
   const { language } = useI18nStore();
 
-  // 컴포넌트 언마운트 시 브랜딩 초기화
   useEffect(() => {
     return () => {
       clearBranding();
@@ -43,326 +121,182 @@ const ConferenceDetail: React.FC = () => {
   useEffect(() => {
     const fetchConferenceData = async () => {
       if (!conferenceId) return;
-
       try {
         setLoading(true);
-
-        // 학술대회 정보 가져오기
         const conferenceDoc = await getDoc(doc(db, 'conferences', conferenceId));
-        if (!conferenceDoc.exists()) {
-          setError('학술대회를 찾을 수 없습니다.');
-          return;
-        }
+        if (!conferenceDoc.exists()) return;
 
-        const conferenceData = {
-          id: conferenceDoc.id,
-          ...conferenceDoc.data()
-        } as Conference;
+        const conferenceData = { id: conferenceDoc.id, ...conferenceDoc.data() } as Conference;
         setConference(conferenceData);
+        if (conferenceData.branding) setBranding(conferenceData.branding);
 
-        // 브랜딩 설정 적용
-        if (conferenceData.branding) {
-          setBranding(conferenceData.branding);
-        }
-
-        // 간행물 리스트 가져오기
-        const publicationsQuery = query(
-          collection(db, 'publications'),
-          where('conferenceId', '==', conferenceId)
-        );
+        const publicationsQuery = query(collection(db, 'publications'), where('conferenceId', '==', conferenceId));
         const publicationsSnapshot = await getDocs(publicationsQuery);
-        const publicationsData = publicationsSnapshot.docs.map(doc => ({
-          id: doc.id,
-          ...doc.data()
-        } as Publication));
-
+        const publicationsData = publicationsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Publication));
         setPublications(publicationsData);
-
-        // 첫 번째 간행물 자동 선택
-        if (publicationsData.length > 0) {
-          setSelectedPublication(publicationsData[0]);
-        }
-
-      } catch (err: any) { // eslint-disable-line @typescript-eslint/no-explicit-any
+      } catch (err) {
         console.error('Error fetching conference data:', err);
-        setError('데이터를 불러오는데 실패했습니다.');
       } finally {
         setLoading(false);
       }
     };
-
     fetchConferenceData();
-  }, [conferenceId]);
+  }, [conferenceId, setBranding]);
 
-  const formatDate = (dateStr: string) => {
-    const date = new Date(dateStr);
+  const formatDate = (value: any) => {
+    if (!value) return '날짜 정보 없음';
+    let date: Date;
+    if (value instanceof Date) date = value;
+    else if (value && typeof value.toDate === 'function') date = value.toDate();
+    else date = new Date(value);
+    if (isNaN(date.getTime())) return '날짜 정보 없음';
     return date.toLocaleDateString('ko-KR', { year: 'numeric', month: 'long', day: 'numeric' });
   };
 
   const getPublicationTypeLabel = (type: string) => {
-    const labels = {
-      abstract: '초록집',
-      poster: '포스터',
-      presentation: '구연발표'
-    };
+    const labels = { abstract: '초록집', poster: '포스터', presentation: '구연발표' };
     return labels[type as keyof typeof labels] || type;
   };
 
-  const renderTOC = (toc: TOCItem[]) => {
-    return (
-      <ul className="space-y-2">
-        {toc.map((item) => (
-          <li key={item.id}>
-            <a
-              href={`#block-${item.blockId}`}
-              className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300 hover:text-blue-600 dark:hover:text-blue-400 transition-colors py-1"
-            >
-              <span className={`text-gray-400 ${item.level === 1 ? 'font-bold' : ''}`}>
-                {'•'.repeat(item.level)}
-              </span>
-              <span className="flex-1">{getLocalText(item.title)}</span>
-            </a>
-            {item.children && item.children.length > 0 && (
-              <div className="ml-4 mt-1">{renderTOC(item.children)}</div>
-            )}
-          </li>
-        ))}
-      </ul>
-    );
-  };
-
   if (loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-16 w-16 border-b-2 border-blue-600 mx-auto mb-4"></div>
-          <p className="text-gray-600 dark:text-gray-400">로딩 중...</p>
-        </div>
-      </div>
-    );
+     return (
+       <div className="min-h-screen flex items-center justify-center bg-mesh">
+         <div className="animate-spin rounded-full h-16 w-16 border-b-2 border-blue-600"></div>
+       </div>
+     );
   }
 
-  if (error || !conference) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900 px-4">
-        <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-8 max-w-md text-center">
-          <p className="text-red-600 dark:text-red-400 mb-4">{error || '학술대회를 찾을 수 없습니다.'}</p>
-          <Link
-            to="/"
-            className="inline-block bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg"
-          >
-            목록으로 돌아가기
-          </Link>
-        </div>
-      </div>
-    );
-  }
+  if (!conference) return null;
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
-      {/* 헤더 */}
-      <div className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
-        <div className="container mx-auto px-4 py-6">
-          <Link
-            to="/"
-            className="inline-flex items-center gap-2 text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 mb-4"
-          >
-            <ArrowLeftIcon className="w-4 h-4" />
-            <span className="text-sm font-medium">목록으로</span>
+    <div className="min-h-screen bg-mesh dark:bg-slate-950 transition-colors duration-500">
+      {/* Redesigned Header */}
+      <nav className="glass-effect border-b border-white/20 dark:border-slate-800/50 px-6 py-4">
+        <div className="max-w-7xl mx-auto flex items-center justify-between">
+          <Link to="/" className="flex items-center gap-3 transition-transform hover:translate-x-[-4px]">
+            <div className="w-8 h-8 rounded-full bg-slate-100 dark:bg-slate-800 flex items-center justify-center">
+              <ArrowLeftIcon className="w-4 h-4 text-slate-500" />
+            </div>
+            <span className="text-sm font-black text-slate-500 uppercase tracking-widest">목록으로</span>
           </Link>
+          <div className="flex items-center gap-3">
+             <span className="text-lg font-black text-slate-900 dark:text-white tracking-widest uppercase">EBOOK</span>
+          </div>
+        </div>
+      </nav>
 
-          <div className="flex items-start justify-between">
-            <div className="flex-1">
-              <h1 className="text-3xl font-bold text-gray-900 dark:text-gray-100 mb-4">
-                {getLocalText(conference.name)}
-              </h1>
-              <p className="text-gray-600 dark:text-gray-400 mb-4">
-                {getLocalText(conference.description)}
+      <main className="max-w-5xl mx-auto px-6 pt-20 pb-24">
+        {/* Conference Hero Header */}
+        <header className="mb-24 animate-fade-in-up md:px-8">
+          <div className="flex flex-col md:flex-row md:items-center gap-4 mb-8">
+             <span className="self-start px-4 py-2 rounded-full bg-slate-900 text-white dark:bg-white dark:text-slate-900 text-xs font-black tracking-[0.2em] uppercase shadow-xl shadow-slate-900/10">
+               CONFERENCE ARCHIVE
+             </span>
+             <span className="hidden md:block w-1.5 h-1.5 rounded-full bg-slate-300 dark:bg-slate-700"></span>
+             <span className="text-slate-500 dark:text-slate-400 text-sm font-bold tracking-tight">
+               {formatDate(conference.startDate)} - {formatDate(conference.endDate)}
+             </span>
+          </div>
+          
+          <h1 className="text-5xl sm:text-6xl md:text-7xl font-black text-slate-900 dark:text-white mb-10 tracking-tighter leading-[1.05]">
+            {getLocalText(conference.name)}
+          </h1>
+          
+          <p className="text-xl md:text-2xl text-slate-600 dark:text-slate-400 font-bold leading-relaxed max-w-4xl mb-16">
+            {getLocalText(conference.description)}
+          </p>
+
+          <div className="flex flex-col sm:flex-row flex-wrap gap-6 sm:gap-12 py-8 px-8 border border-slate-200/60 dark:border-slate-800/60 bg-white/40 dark:bg-slate-900/40 backdrop-blur-md rounded-[2.5rem] shadow-[0_10px_40px_rgba(15,23,42,0.04)]">
+             <div className="flex flex-col gap-2">
+                <span className="text-[11px] font-black text-slate-400 uppercase tracking-widest">LOCATION</span>
+                <div className="flex items-center gap-2 text-slate-900 dark:text-slate-200 font-black text-lg">
+                   <MapPinIcon className="w-6 h-6 text-blue-600" />
+                   {getLocalText(conference.venue)}
+                </div>
+             </div>
+             <div className="hidden sm:block w-px bg-slate-200/60 dark:bg-slate-800/60"></div>
+             <div className="flex flex-col gap-2">
+                <span className="text-[11px] font-black text-slate-400 uppercase tracking-widest">ORGANIZER</span>
+                <div className="flex items-center gap-2 text-slate-900 dark:text-slate-200 font-black text-lg">
+                   <UserGroupIcon className="w-6 h-6 text-blue-600" />
+                   {conference.organizer}
+                </div>
+             </div>
+          </div>
+        </header>
+
+        {/* Publications Grid */}
+        <section className="space-y-10 animate-fade-in-up" style={{ animationDelay: '0.2s' }}>
+           <div className="flex items-center justify-between">
+              <h2 className="text-2xl font-black text-slate-900 dark:text-white tracking-tight">발간된 리츠 자료</h2>
+              <span className="text-slate-400 font-bold text-sm">{publications.length} 개의 간행물</span>
+           </div>
+
+           {publications.length === 0 ? (
+             <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] p-20 text-center border-2 border-dashed border-slate-200 dark:border-slate-800">
+                <DocumentTextIcon className="w-16 h-16 text-slate-200 dark:text-slate-800 mx-auto mb-4" />
+                <p className="text-slate-400 font-bold">등록된 간행물이 없습니다.</p>
+             </div>
+           ) : (
+             <div className="grid grid-cols-1 gap-8">
+                {publications.map((pub) => (
+                  <PublicationCard 
+                    key={pub.id} 
+                    publication={pub} 
+                    formatDate={formatDate} 
+                    getLocalText={getLocalText}
+                    getPublicationTypeLabel={getPublicationTypeLabel}
+                  />
+                ))}
+             </div>
+           )}
+        </section>
+      </main>
+
+      {/* Modern Footer with Hongcom Info */}
+      <footer className="border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 py-16 px-6">
+        <div className="max-w-5xl mx-auto">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-12 items-start mb-12">
+            <div>
+              <div className="flex items-center gap-3 mb-6">
+                <div className="w-8 h-8 bg-slate-200 dark:bg-slate-800 rounded-lg flex items-center justify-center">
+                  <AcademicCapIcon className="w-5 h-5 text-slate-500" />
+                </div>
+                <span className="font-black text-slate-900 dark:text-white tracking-widest uppercase">EBOOK</span>
+              </div>
+              <p className="text-slate-500 dark:text-slate-400 text-sm font-medium leading-relaxed max-w-sm">
+                최신 학술대회의 가치를 디지털로 보존하고 확산합니다. 혁신적인 eBook 솔루션으로 전문가의 지식 경험을 완성합니다.
               </p>
-
-              <div className="flex flex-wrap gap-6 text-sm text-gray-600 dark:text-gray-400">
-                <div className="flex items-center gap-2">
-                  <CalendarIcon className="w-4 h-4" />
-                  <span>{formatDate(conference.startDate)} ~ {formatDate(conference.endDate)}</span>
+            </div>
+            
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-8 text-sm">
+              <div className="space-y-4">
+                <h4 className="font-black text-slate-900 dark:text-white uppercase tracking-widest text-xs">Company Info</h4>
+                <div className="space-y-2 text-slate-500 dark:text-slate-400 font-medium">
+                   <p>주식회사 홍커뮤니케이션 (HONG COM. CORP)</p>
+                   <p>대표이사: 이혜정</p>
+                   <p>사업자등록번호: 264-81-48344</p>
                 </div>
-
-                <div className="flex items-center gap-2">
-                  <MapPinIcon className="w-4 h-4" />
-                  <span>{getLocalText(conference.venue)}</span>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <UserGroupIcon className="w-4 h-4" />
-                  <span>{conference.organizer}</span>
+              </div>
+              <div className="space-y-4">
+                <h4 className="font-black text-slate-900 dark:text-white uppercase tracking-widest text-xs">Contact Us</h4>
+                <div className="space-y-2 text-slate-500 dark:text-slate-400 font-medium">
+                   <p>서울특별시 송파구 송파대로 167, B동 319호 (문정동, 문정역테라타워)</p>
+                   <p>TEL: 02-6959-3871~3</p>
+                   <p>FAX: 02-2054-3874</p>
+                   <p>Email: info@hongcomm.kr</p>
                 </div>
               </div>
             </div>
           </div>
-        </div>
-      </div>
-
-      {/* 메인 컨텐츠 */}
-      <div className="container mx-auto px-4 py-8">
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* 왼쪽: 간행물 리스트 */}
-          <div className="lg:col-span-1">
-            <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg p-6 sticky top-6">
-              <h2 className="text-lg font-bold text-gray-900 dark:text-gray-100 mb-4">
-                간행물 ({publications.length})
-              </h2>
-
-              {publications.length === 0 ? (
-                <div className="text-center py-8">
-                  <DocumentTextIcon className="w-12 h-12 text-gray-400 mx-auto mb-3" />
-                  <p className="text-sm text-gray-600 dark:text-gray-400">
-                    등록된 간행물이 없습니다
-                  </p>
-                </div>
-              ) : (
-                <div className="space-y-2">
-                  {publications.map((publication) => (
-                    <button
-                      key={publication.id}
-                      onClick={() => setSelectedPublication(publication)}
-                      className={`w-full text-left p-4 rounded-lg transition-colors ${
-                        selectedPublication?.id === publication.id
-                          ? 'bg-blue-50 dark:bg-blue-900/20 border-2 border-blue-600 dark:border-blue-400'
-                          : 'bg-gray-50 dark:bg-gray-900 border-2 border-transparent hover:border-gray-300 dark:hover:border-gray-700'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="text-xs font-medium text-blue-600 dark:text-blue-400 uppercase">
-                          {getPublicationTypeLabel(publication.type)}
-                        </span>
-                        {publication.status === 'published' && (
-                          <span className="text-xs bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 px-2 py-1 rounded-full">
-                            발행완료
-                          </span>
-                        )}
-                      </div>
-
-                      <h3 className="font-medium text-gray-900 dark:text-gray-100 mb-1">
-                        {getLocalText(publication.title)}
-                      </h3>
-
-                      {publication.publishedAt && (
-                        <p className="text-xs text-gray-500 dark:text-gray-400">
-                          {formatDate(typeof publication.publishedAt === 'string' ? publication.publishedAt : publication.publishedAt.toISOString())}
-                        </p>
-                      )}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* 오른쪽: 선택된 간행물 상세 및 목차 */}
-          <div className="lg:col-span-2">
-            {selectedPublication ? (
-              <div className="space-y-6">
-                {/* 간행물 정보 카드 */}
-                <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg overflow-hidden">
-                  {selectedPublication.coverImage && (
-                    <div className="aspect-w-16 aspect-h-9">
-                      <img
-                        src={selectedPublication.coverImage}
-                        alt={getLocalText(selectedPublication.title)}
-                        className="w-full h-48 object-cover"
-                      />
-                    </div>
-                  )}
-
-                  <div className="p-6">
-                    <div className="flex items-center gap-3 mb-4">
-                      <span className="text-sm font-medium text-blue-600 dark:text-blue-400 uppercase">
-                        {getPublicationTypeLabel(selectedPublication.type)}
-                      </span>
-                      {selectedPublication.status === 'published' && (
-                        <span className="text-xs bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 px-2 py-1 rounded-full">
-                          발행완료
-                        </span>
-                      )}
-                    </div>
-
-                    <h2 className="text-2xl font-bold text-gray-900 dark:text-gray-100 mb-4">
-                      {getLocalText(selectedPublication.title)}
-                    </h2>
-
-                    {selectedPublication.articles && selectedPublication.articles.length > 0 && (
-                      <div className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400 mb-6">
-                        <BookOpenIcon className="w-4 h-4" />
-                        <span>{selectedPublication.articles.length}개의 발표 자료</span>
-                      </div>
-                    )}
-
-                    <Link
-                      to={`/viewer/${selectedPublication.id}`}
-                      className="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-6 rounded-lg transition-colors"
-                    >
-                      <PlayIcon className="w-4 h-4" />
-                      eBook 열기
-                    </Link>
-                  </div>
-                </div>
-
-                {/* 목차 프리뷰 */}
-                {selectedPublication.articles && selectedPublication.articles.length > 0 && (
-                  <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg p-6">
-                    <h3 className="text-lg font-bold text-gray-900 dark:text-gray-100 mb-4">
-                      목차 프리뷰
-                    </h3>
-
-                    <div className="space-y-4">
-                      {selectedPublication.articles.slice(0, 5).map((article) => (
-                        <div key={article.id}>
-                          <h4 className="font-medium text-gray-900 dark:text-gray-100 mb-2">
-                            {getLocalText(article.title)}
-                          </h4>
-
-                          {article.toc && article.toc.length > 0 && (
-                            <div className="ml-4 text-sm text-gray-600 dark:text-gray-400">
-                              {renderTOC(article.toc.slice(0, 3))}
-                            </div>
-                          )}
-
-                          {article.toc && article.toc.length > 3 && (
-                            <p className="text-sm text-gray-500 dark:text-gray-500 mt-1 ml-4">
-                              ... 외 {article.toc.length - 3}개 항목
-                            </p>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-
-                    {selectedPublication.articles.length > 5 && (
-                      <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700 text-center">
-                        <Link
-                          to={`/viewer/${selectedPublication.id}`}
-                          className="text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 text-sm font-medium inline-flex items-center gap-1"
-                        >
-                          전체 목차 보기
-                          <ChevronRightIcon className="w-4 h-4" />
-                        </Link>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            ) : (
-              <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg p-12 text-center">
-                <DocumentTextIcon className="w-16 h-16 text-gray-400 mx-auto mb-4" />
-                <h3 className="text-xl font-bold text-gray-900 dark:text-gray-100 mb-2">
-                  간행물을 선택해주세요
-                </h3>
-                <p className="text-gray-600 dark:text-gray-400">
-                  왼쪽 목록에서 간행물을 선택하면 상세 정보가 표시됩니다.
-                </p>
-              </div>
-            )}
+          
+          <div className="pt-8 border-t border-slate-100 dark:border-slate-900 flex flex-col md:flex-row items-center justify-between gap-4">
+            <span className="text-xs font-bold text-slate-400 dark:text-slate-500 tracking-tight">
+              © 2026 HONG COM. CORP. ALL RIGHTS RESERVED.
+            </span>
           </div>
         </div>
-      </div>
+      </footer>
     </div>
   );
 };
