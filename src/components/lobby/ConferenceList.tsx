@@ -42,7 +42,7 @@ const ConferenceCard: React.FC<ConferenceCardProps> = ({ conference }) => {
 
   return (
     <Link to={`/conferences/${conference.id}`} className="block group h-full">
-      <div className="relative bg-white/80 dark:bg-slate-900/80 backdrop-blur-md rounded-[2.5rem] p-1 shadow-lg shadow-slate-200/20 dark:shadow-none border border-slate-200/60 dark:border-slate-800 transition-all duration-300 hover:shadow-2xl hover:shadow-blue-900/5 hover:-translate-y-1 h-full flex flex-col overflow-hidden">
+      <div className="relative bg-white/80 dark:bg-slate-900/80 backdrop-blur-md rounded-2xl p-1 shadow-lg shadow-slate-200/20 dark:shadow-none border border-slate-200/60 dark:border-slate-800 transition-all duration-300 hover:shadow-2xl hover:shadow-blue-900/5 hover:-translate-y-1 h-full flex flex-col overflow-hidden">
         {/* Top Section with Icon and Status */}
         <div className="p-8 pb-4">
           <div className="flex items-start justify-between mb-6">
@@ -226,7 +226,7 @@ const ConferenceList: React.FC = () => {
 
           {filteredConferences.length === 0 ? (
             <div className="py-24 text-center animate-fade-in">
-              <div className="w-20 h-20 bg-slate-100 dark:bg-slate-900 rounded-[2.5rem] flex items-center justify-center mx-auto mb-6">
+              <div className="w-20 h-20 bg-slate-100 dark:bg-slate-900 rounded-2xl flex items-center justify-center mx-auto mb-6">
                 <MagnifyingGlassIcon className="w-10 h-10 text-slate-300" />
               </div>
               <h3 className="text-2xl font-bold text-slate-900 dark:text-white mb-2">검색 결과가 없습니다</h3>

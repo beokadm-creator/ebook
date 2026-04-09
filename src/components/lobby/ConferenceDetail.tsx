@@ -18,8 +18,8 @@ import {
 
 interface PublicationCardProps {
   publication: Publication;
-  formatDate: (v: string) => string;
-  getLocalText: (v: string) => string;
+  formatDate: (v: string | Date | undefined) => string;
+  getLocalText: (v: BilingualValue | string | undefined) => string;
   getPublicationTypeLabel: (v: string) => string;
 }
 
@@ -30,7 +30,7 @@ const PublicationCard: React.FC<PublicationCardProps> = ({
   getPublicationTypeLabel 
 }) => {
   return (
-    <div className="group bg-white/80 dark:bg-slate-900/80 backdrop-blur-md rounded-[2.5rem] overflow-hidden border border-slate-200/60 dark:border-slate-800 shadow-lg shadow-slate-200/20 dark:shadow-none p-2 transition-all duration-300 hover:shadow-2xl hover:shadow-blue-900/5 hover:-translate-y-1 flex flex-col md:flex-row relative">
+    <div className="group bg-white/80 dark:bg-slate-900/80 backdrop-blur-md rounded-2xl overflow-hidden border border-slate-200/60 dark:border-slate-800 shadow-lg shadow-slate-200/20 dark:shadow-none p-2 transition-all duration-300 hover:shadow-2xl hover:shadow-blue-900/5 hover:-translate-y-1 flex flex-col md:flex-row relative">
       <div className="md:w-72 flex-shrink-0 bg-slate-100 dark:bg-slate-800/50 rounded-[2rem] overflow-hidden relative group-hover:bg-blue-50 dark:group-hover:bg-blue-900/20 transition-colors">
         {publication.coverImage ? (
           <img
@@ -143,12 +143,17 @@ const ConferenceDetail: React.FC = () => {
     fetchConferenceData();
   }, [conferenceId, setBranding]);
 
-  const formatDate = (value: string) => {
+  const formatDate = (value: string | Date | undefined): string => {
     if (!value) return '날짜 정보 없음';
     let date: Date;
-    if (value instanceof Date) date = value;
-    else if (value && typeof value.toDate === 'function') date = value.toDate();
-    else date = new Date(value);
+    if (value instanceof Date) {
+      date = value;
+    } else if (typeof value === 'object' && value !== null && 'toDate' in value) {
+      const timestamp = value as { toDate: () => Date };
+      date = timestamp.toDate();
+    } else {
+      date = new Date(value);
+    }
     if (isNaN(date.getTime())) return '날짜 정보 없음';
     return date.toLocaleDateString('ko-KR', { year: 'numeric', month: 'long', day: 'numeric' });
   };
@@ -206,7 +211,7 @@ const ConferenceDetail: React.FC = () => {
             {getLocalText(conference.description)}
           </p>
 
-          <div className="flex flex-col sm:flex-row flex-wrap gap-6 sm:gap-12 py-8 px-8 border border-slate-200/60 dark:border-slate-800/60 bg-white/40 dark:bg-slate-900/40 backdrop-blur-md rounded-[2.5rem] shadow-[0_10px_40px_rgba(15,23,42,0.04)]">
+          <div className="flex flex-col sm:flex-row flex-wrap gap-6 sm:gap-12 py-8 px-8 border border-slate-200/60 dark:border-slate-800/60 bg-white/40 dark:bg-slate-900/40 backdrop-blur-md rounded-2xl shadow-[0_10px_40px_rgba(15,23,42,0.04)]">
              <div className="flex flex-col gap-2">
                 <span className="text-[11px] font-black text-slate-400 uppercase tracking-widest">LOCATION</span>
                 <div className="flex items-center gap-2 text-slate-900 dark:text-slate-200 font-black text-lg">
@@ -233,7 +238,7 @@ const ConferenceDetail: React.FC = () => {
            </div>
 
            {publications.length === 0 ? (
-             <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] p-20 text-center border-2 border-dashed border-slate-200 dark:border-slate-800">
+             <div className="bg-white dark:bg-slate-900 rounded-2xl p-20 text-center border-2 border-dashed border-slate-200 dark:border-slate-800">
                 <DocumentTextIcon className="w-16 h-16 text-slate-200 dark:text-slate-800 mx-auto mb-4" />
                 <p className="text-slate-400 font-bold">등록된 간행물이 없습니다.</p>
              </div>

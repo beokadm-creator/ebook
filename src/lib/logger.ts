@@ -1,7 +1,9 @@
 /**
  * Logger utility for consistent error logging across the application
- * Replace all console.error calls with this logger
+ * Integrates with Sentry for production error tracking
  */
+
+import * as Sentry from '@sentry/react';
 
 interface LogContext {
   context?: string;
@@ -16,34 +18,46 @@ class Logger {
     if (this.isDevelopment) {
       console.error(`[${context?.context || 'App'}] ${message}`, context?.error, context?.data);
     } else {
-      // In production, send to error tracking service
-      // Example: Firebase Crashlytics, Sentry, etc.
-      // Crashlytics.recordError(error);
-      this.sendToErrorTracking(message, context);
+      this.sendToSentry(message, context);
     }
   }
 
   warn(message: string, context?: LogContext): void {
     if (this.isDevelopment) {
       console.warn(`[${context?.context || 'App'}] ${message}`, context?.data);
+    } else {
+      Sentry.addBreadcrumb({
+        category: context?.context || 'App',
+        message,
+        level: 'warning',
+        data: context?.data,
+      });
     }
   }
 
   info(message: string, context?: LogContext): void {
     if (this.isDevelopment) {
       console.info(`[${context?.context || 'App'}] ${message}`, context?.data);
+    } else {
+      Sentry.addBreadcrumb({
+        category: context?.context || 'App',
+        message,
+        level: 'info',
+        data: context?.data,
+      });
     }
   }
 
-  private sendToErrorTracking(_message: string, _context?: LogContext): void {
-    // TODO: Integrate with Firebase Crashlytics or Sentry
-    // Currently preparing the logging infrastructure
-    // When ready, uncomment:
-    // import { getAnalytics, logEvent } from 'firebase/analytics';
-    // logEvent('admin_error', { 
-    //   error_message: _message, 
-    //   context: _context?.context 
-    // });
+  private sendToSentry(message: string, context?: LogContext): void {
+    Sentry.captureException(context?.error || new Error(message), {
+      tags: {
+        context: context?.context || 'App',
+      },
+      extra: {
+        message,
+        ...context?.data,
+      },
+    });
   }
 }
 

@@ -259,7 +259,7 @@ const EbookViewer: React.FC<EbookViewerProps> = ({ publicationId, title, entries
                   <img
                     src={getRenderableImageUrl(entry.src)}
                     alt={entry.alt}
-                    className="w-full rounded-[28px] shadow-[0_20px_60px_rgba(15,23,42,0.12)]"
+                    className="w-full rounded-2xl shadow-[0_20px_60px_rgba(15,23,42,0.12)]"
                   />
                   {entry.caption ? (
                     <figcaption className="mt-3 text-center text-sm text-slate-500">{entry.caption}</figcaption>
@@ -278,7 +278,7 @@ const EbookViewer: React.FC<EbookViewerProps> = ({ publicationId, title, entries
 
             if (entry.semanticRole === 'heading' || entry.semanticRole === 'subheading') {
               return (
-                <section key={entry.id} id={entry.anchorId} className="scroll-mt-24 rounded-[24px] bg-white/70 px-5 py-5 shadow-[0_10px_30px_rgba(15,23,42,0.05)]">
+                <section key={entry.id} id={entry.anchorId} className="scroll-mt-24 rounded-2xl bg-white/70 px-5 py-5 shadow-[0_10px_30px_rgba(15,23,42,0.05)]">
                   <h3 className={`leading-tight text-slate-900 ${entry.semanticRole === 'heading' ? 'text-2xl font-semibold sm:text-3xl' : 'text-xl font-semibold sm:text-2xl'}`}>
                     {renderEntryContent(entry)}
                   </h3>
@@ -413,7 +413,7 @@ const EbookViewer: React.FC<EbookViewerProps> = ({ publicationId, title, entries
             </div>
 
             <div className="space-y-4">
-              <label className="block rounded-[1.5rem] bg-slate-50/80 border border-slate-200/60 px-5 py-4">
+              <label className="block rounded-2xl bg-slate-50/80 border border-slate-200/60 px-5 py-4">
                 <span className="mb-3 flex items-center justify-between text-sm font-bold text-slate-700">
                    <span>텍스트 크기</span>
                    <span className="text-slate-400">{Math.round(fontScale * 100)}%</span>
@@ -421,7 +421,7 @@ const EbookViewer: React.FC<EbookViewerProps> = ({ publicationId, title, entries
                 <input type="range" min="0.9" max="1.4" step="0.05" value={fontScale} onChange={(event) => setFontScale(Number(event.target.value))} className="w-full accent-slate-900" />
               </label>
               
-              <label className="block rounded-[1.5rem] bg-slate-50/80 border border-slate-200/60 px-5 py-4">
+              <label className="block rounded-2xl bg-slate-50/80 border border-slate-200/60 px-5 py-4">
                 <span className="mb-3 flex items-center justify-between text-sm font-bold text-slate-700">
                    <span>줄 간격 (행간)</span>
                    <span className="text-slate-400">{lineHeight.toFixed(2)}</span>
@@ -429,7 +429,7 @@ const EbookViewer: React.FC<EbookViewerProps> = ({ publicationId, title, entries
                 <input type="range" min="1.5" max="2.2" step="0.05" value={lineHeight} onChange={(event) => setLineHeight(Number(event.target.value))} className="w-full accent-slate-900" />
               </label>
 
-              <label className="block rounded-[1.5rem] bg-slate-50/80 border border-slate-200/60 px-5 py-4">
+              <label className="block rounded-2xl bg-slate-50/80 border border-slate-200/60 px-5 py-4">
                 <span className="mb-3 flex items-center justify-between text-sm font-bold text-slate-700">
                    <span>글자 간격 (자간)</span>
                    <span className="text-slate-400">{letterSpacing.toFixed(2)}px</span>
@@ -437,7 +437,7 @@ const EbookViewer: React.FC<EbookViewerProps> = ({ publicationId, title, entries
                 <input type="range" min="-0.5" max="1.5" step="0.05" value={letterSpacing} onChange={(event) => setLetterSpacing(Number(event.target.value))} className="w-full accent-slate-900" />
               </label>
 
-              <div className="block rounded-[1.5rem] bg-slate-50/80 border border-slate-200/60 px-5 py-4">
+              <div className="block rounded-2xl bg-slate-50/80 border border-slate-200/60 px-5 py-4">
                 <span className="mb-3 block text-sm font-bold text-slate-700">본문 폭</span>
                 <div className="grid grid-cols-3 gap-2">
                   <button type="button" onClick={() => setReadingWidth('compact')} className={`rounded-xl px-3 py-2.5 text-sm font-bold transition-colors shadow-sm ${readingWidth === 'compact' ? 'bg-slate-900 text-white' : 'bg-white text-slate-600 hover:bg-slate-100'}`}>좁게</button>

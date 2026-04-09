@@ -3,6 +3,7 @@ import { getFirestore, connectFirestoreEmulator } from 'firebase/firestore';
 import { getAuth, connectAuthEmulator } from 'firebase/auth';
 import { getStorage, connectStorageEmulator } from 'firebase/storage';
 import { getFunctions, connectFunctionsEmulator } from 'firebase/functions';
+import { logger } from './logger';
 
 const normalizeStorageBucket = (value?: string) => {
   if (!value) {
@@ -24,7 +25,7 @@ const requiredFirebaseEnvKeys = [
 const missingFirebaseEnvKeys = requiredFirebaseEnvKeys.filter((key) => !import.meta.env[key]);
 
 if (missingFirebaseEnvKeys.length > 0) {
-  console.warn(`[firebase] missing env: ${missingFirebaseEnvKeys.join(', ')}`);
+  logger.warn(`[firebase] missing env: ${missingFirebaseEnvKeys.join(', ')}`);
 }
 
 const firebaseConfig = {
@@ -50,33 +51,33 @@ if (import.meta.env.DEV && import.meta.env.VITE_FIREBASE_USE_EMULATOR === 'true'
   // Firestore Emulator
   try {
     connectFirestoreEmulator(db, 'localhost', 8080);
-    console.log('🔥 Firestore Emulator에 연결되었습니다 (localhost:8080)');
+    logger.info('🔥 Firestore Emulator에 연결되었습니다 (localhost:8080)', { context: 'Firebase' });
   } catch {
-    console.log('Firestore Emulator 이미 연결됨');
+    logger.info('Firestore Emulator 이미 연결됨', { context: 'Firebase' });
   }
 
   // Auth Emulator
   try {
     connectAuthEmulator(auth, 'http://localhost:9099');
-    console.log('🔥 Auth Emulator에 연결되었습니다 (localhost:9099)');
+    logger.info('🔥 Auth Emulator에 연결되었습니다 (localhost:9099)', { context: 'Firebase' });
   } catch {
-    console.log('Auth Emulator 이미 연결됨');
+    logger.info('Auth Emulator 이미 연결됨', { context: 'Firebase' });
   }
 
   // Storage Emulator
   try {
     connectStorageEmulator(storage, 'localhost', 9199);
-    console.log('🔥 Storage Emulator에 연결되었습니다 (localhost:9199)');
+    logger.info('🔥 Storage Emulator에 연결되었습니다 (localhost:9199)', { context: 'Firebase' });
   } catch {
-    console.log('Storage Emulator 이미 연결됨');
+    logger.info('Storage Emulator 이미 연결됨', { context: 'Firebase' });
   }
 
   // Functions Emulator
   try {
     connectFunctionsEmulator(functions, 'localhost', 5001);
-    console.log('🔥 Functions Emulator에 연결되었습니다 (localhost:5001)');
+    logger.info('🔥 Functions Emulator에 연결되었습니다 (localhost:5001)', { context: 'Firebase' });
   } catch {
-    console.log('Functions Emulator 이미 연결됨');
+    logger.info('Functions Emulator 이미 연결됨', { context: 'Firebase' });
   }
 }
 

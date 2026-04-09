@@ -321,7 +321,7 @@ const ConferenceForm: React.FC<ConferenceFormProps> = ({ conference, onSubmit, o
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-gray-900/40 dark:bg-black/80 backdrop-blur-sm p-4 sm:p-6 animate-fade-in">
-      <div className="bg-white dark:bg-gray-900 shadow-2xl w-full max-w-xl rounded-[2.5rem] overflow-hidden border border-white/20 dark:border-white/5 animate-fade-in-up transform transition-all">
+      <div className="bg-white dark:bg-gray-900 shadow-2xl w-full max-w-xl rounded-2xl overflow-hidden border border-white/20 dark:border-white/5 animate-fade-in-up transform transition-all">
         <div className="bg-white/90 dark:bg-gray-900/90 backdrop-blur-xl border-b border-gray-100 dark:border-gray-800 px-8 py-6 flex items-center justify-between">
           <div className="flex items-center gap-4">
             <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-brand-primary/10 to-brand-secondary/10 flex items-center justify-center text-brand-primary shadow-inner shrink-0">

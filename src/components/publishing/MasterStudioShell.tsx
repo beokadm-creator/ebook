@@ -67,7 +67,7 @@ const MiniMasterCard: React.FC<{
   <button
     type="button"
     onClick={onClick}
-    className={`block w-full rounded-[26px] border p-4 text-left transition ${
+    className={`block w-full rounded-2xl border p-4 text-left transition ${
       isActive ? 'border-slate-900 bg-slate-900 text-white' : 'border-slate-200 bg-white text-slate-900 hover:border-slate-400'
     }`}
   >

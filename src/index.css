@@ -41,26 +41,24 @@
   font-family: 'NanumSquare', -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
   line-height: 1.6;
   font-weight: 400;
-  font-size: 16px; /* 기본 글자 크기 증가 - 접근성 개선 */
+  font-size: 16px;
 
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 
-  /* Brand Colors - default blue theme */
-  --brand-primary: #3b82f6;
-  --brand-primary-light: #dbeafe;
-  --brand-primary-hover: #2563eb;
-  --brand-primary-dark: #1d4ed8;
-  --brand-secondary: #8b5cf6;
-  --brand-secondary-light: #ede9fe;
+  /* Brand Colors - 딥 네이비 & 골드 (CLAUDE.md design specs) */
+  --brand-primary: #1a2744;       /* 딥 네이비 */
+  --brand-primary-light: #e8edf5; /* 네이비 틴트 */
+  --brand-primary-hover: #243660; /* 호버 상태 */
+  --brand-secondary: #c9a84c;     /* 골드 포인트 */
+  --brand-secondary-light: #f5edda;
 }
 
 .dark {
-  --brand-primary-light: #1e3a5f;
-  --brand-primary-dark: #60a5fa;
-  --brand-secondary-light: #2d1b69;
+  --brand-primary-light: #e8edf5;
+  --brand-secondary-light: #f5edda;
 }
 
 /* 접근성 강화 - 포커스 스타일 개선 */
@@ -190,7 +188,7 @@ select {
 }
 
 .dark .bg-mesh {
-  background-color: #0f172a;
+  background-color: #12172b;
   background-image: 
     radial-gradient(at 0% 0%, hsla(217, 91%, 60%, 0.05) 0px, transparent 50%),
     radial-gradient(at 50% 0%, hsla(262, 83%, 58%, 0.05) 0px, transparent 50%),
