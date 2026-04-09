@@ -6,10 +6,8 @@ import ConferenceList from './components/lobby/ConferenceList';
 import ConferenceDetail from './components/lobby/ConferenceDetail';
 import MyPage from './components/mypage/MyPage';
 import AdminDashboard from './components/admin/AdminDashboard';
-import { ConferenceManagement } from './components/admin/ConferenceManagement';
 import { OfflineManager } from './components/offline/OfflineManager';
 import { ErrorBoundary } from './utils/errorHandling';
-import GlobalNav from './components/common/GlobalNav';
 import { ToastContainer } from './components/common/Toast';
 import { useTheme } from './hooks/useTheme';
 
@@ -29,7 +27,6 @@ function AppRoutes() {
       <Route path="/editor/:publicationId" element={<EditorPage />} />
       <Route path="/studio/:publicationId" element={<MasterStudioPage />} />
       <Route path="/admin" element={<ProtectedRoute><AdminDashboard /></ProtectedRoute>} />
-      <Route path="/admin/conferences" element={<ProtectedRoute><ConferenceManagement /></ProtectedRoute>} />
       <Route path="*" element={
         <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900 px-4">
           <div className="text-center">
@@ -51,8 +48,7 @@ function App() {
       <AuthProvider>
         <ErrorBoundary>
           <OfflineManager>
-            <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
-              <GlobalNav />
+            <div className="min-h-screen bg-mesh dark:bg-slate-950 transition-colors duration-500">
               <AppRoutes />
               <ToastContainer />
             </div>
