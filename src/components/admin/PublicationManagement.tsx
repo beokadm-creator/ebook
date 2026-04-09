@@ -21,7 +21,12 @@ import {
   RectangleStackIcon
 } from '@heroicons/react/24/outline';
 
-const PublicationManagement: React.FC = () => {
+interface PublicationManagementProps {
+  conferenceId?: string | null;
+  onBack?: () => void;
+}
+
+const PublicationManagement: React.FC<PublicationManagementProps> = ({ conferenceId, onBack }) => {
   const [publications, setPublications] = useState<Publication[]>([]);
   const [conferences, setConferences] = useState<Conference[]>([]);
   const [loading, setLoading] = useState(true);
@@ -30,19 +35,26 @@ const PublicationManagement: React.FC = () => {
 
   useEffect(() => {
     loadData();
-  }, []);
+  }, [conferenceId]);
 
   const loadData = async () => {
     try {
       setLoading(true);
       // Fetch Conferences for selection
-      const confSnapshot = await getDocs(query(collection(db, 'conferences'), orderBy('name.ko', 'asc')));
+      const confSnapshot = await getDocs(query(collection(db, 'conferences'), orderBy('startDate', 'desc')));
       const confData = confSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Conference));
       setConferences(confData);
 
       // Fetch Publications
-      const pubSnapshot = await getDocs(query(collection(db, 'publications'), orderBy('createdAt', 'desc')));
-      const pubData = pubSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Publication));
+      let q = query(collection(db, 'publications'), orderBy('createdAt', 'desc'));
+      const pubSnapshot = await getDocs(q);
+      let pubData = pubSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Publication));
+      
+      // Filter if conferenceId is provided
+      if (conferenceId) {
+        pubData = pubData.filter(p => p.conferenceId === conferenceId);
+      }
+      
       setPublications(pubData);
     } catch (error) {
       console.error('Failed to load data:', error);
@@ -303,10 +315,12 @@ const PublicationForm: React.FC<PublicationFormProps> = ({ publication, conferen
         status: publication.status,
         coverImage: publication.coverImage || ''
       });
+    } else if (conferenceId) {
+      setFormData(prev => ({ ...prev, conferenceId: conferenceId }));
     } else if (conferences.length > 0 && !formData.conferenceId) {
       setFormData(prev => ({ ...prev, conferenceId: conferences[0].id }));
     }
-  }, [publication, conferences]);
+  }, [publication, conferences, conferenceId]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -341,22 +355,24 @@ const PublicationForm: React.FC<PublicationFormProps> = ({ publication, conferen
             required
           />
 
-          <div>
-            <label className="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-2 uppercase tracking-wider">학술대회 선택</label>
-            <select
-              value={formData.conferenceId}
-              onChange={(e) => setFormData({ ...formData, conferenceId: e.target.value })}
-              className="w-full px-5 py-4 bg-gray-50 dark:bg-gray-900 border-2 border-transparent focus:border-brand-primary focus:bg-white dark:focus:bg-gray-950 rounded-2xl transition-all text-gray-900 dark:text-gray-100 font-medium outline-none"
-              required
-            >
-              <option value="" disabled>학술대회를 선택하세요</option>
-              {conferences.map(conf => (
-                <option key={conf.id} value={conf.id}>
-                  {conf.name.ko || conf.name.en}
-                </option>
-              ))}
-            </select>
-          </div>
+          {!conferenceId && (
+            <div>
+              <label className="block text-[11px] font-black text-gray-400 uppercase tracking-widest mb-3">학술대회 선택</label>
+              <select
+                value={formData.conferenceId}
+                onChange={(e) => setFormData({ ...formData, conferenceId: e.target.value })}
+                className="w-full px-5 py-4 bg-gray-50/50 dark:bg-gray-900/50 border border-gray-200 dark:border-gray-800 focus:border-brand-primary rounded-2xl transition-all text-gray-900 dark:text-white font-medium outline-none"
+                required
+              >
+                <option value="" disabled>학술대회를 선택하세요</option>
+                {conferences.map(conf => (
+                  <option key={conf.id} value={conf.id}>
+                    {conf.name.ko || conf.name.en}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div>
