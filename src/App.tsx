@@ -5,7 +5,7 @@ import LoginPage from './components/auth/LoginPage';
 import ConferenceList from './components/lobby/ConferenceList';
 import ConferenceDetail from './components/lobby/ConferenceDetail';
 import MyPage from './components/mypage/MyPage';
-import AdminDashboard from './components/admin/AdminDashboard';
+import { ConferenceManagement } from './components/admin/ConferenceManagement';
 import { OfflineManager } from './components/offline/OfflineManager';
 import { ErrorBoundary } from './utils/errorHandling';
 import { ToastContainer } from './components/common/Toast';
@@ -26,7 +26,7 @@ function AppRoutes() {
       <Route path="/mypage" element={<MyPage />} />
       <Route path="/editor/:publicationId" element={<EditorPage />} />
       <Route path="/studio/:publicationId" element={<MasterStudioPage />} />
-      <Route path="/admin" element={<ProtectedRoute><AdminDashboard /></ProtectedRoute>} />
+      <Route path="/admin" element={<ProtectedRoute><ConferenceManagement /></ProtectedRoute>} />
       <Route path="*" element={
         <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900 px-4">
           <div className="text-center">
