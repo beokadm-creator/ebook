@@ -10,8 +10,8 @@ import {
 import { uploadPublicationImage } from '@/lib/publishing/assets';
 import { formatMm, getPxPerMm, pxToMm } from '@/lib/publishing/a4';
 import { getThreadPlainText } from '@/lib/publishing/defaultDocument';
-import { parseDocxManuscript } from '@/lib/publishing/docxImport';
-import { paginateThreadWithDom } from '@/lib/publishing/domPagination';
+import { parseDocxManuscriptWithAI } from '@/lib/publishing/docxImport';
+import { glmClient } from '@/lib/ai/glmClient';
 import { downloadPagesAsPdf } from '@/lib/publishing/pdf';
 import { TEMPLATE_PRESET_DESCRIPTIONS, TEMPLATE_PRESET_LABELS, TemplatePresetKey } from '@/lib/publishing/templatePresets';
 import { renderRunsToReact } from '@/lib/publishing/richText';
@@ -19,6 +19,7 @@ import { showToast } from '@/components/common/Toast';
 import { usePublishingStore } from '@/stores/publishingStore';
 import { ElementScope, MasterTemplate, PageBlock, PublicationPage, PublishingDocument, TextRole, ZoneKind } from '@/types/publishing';
 import { logError } from '@/utils/errorHandler';
+import FlowGroupContainer from './FlowGroupContainer';
 
 interface PublishingEditorShellProps {
   publicationId: string;
@@ -61,15 +62,6 @@ const roleLabel: Record<TextRole, string> = {
   caption: '캡션',
   quote: '인용문',
 };
-
-const roleOptions: Array<{ value: TextRole; label: string }> = [
-  { value: 'title', label: '표지 제목' },
-  { value: 'heading', label: '섹션 제목' },
-  { value: 'subheading', label: '서브 섹션' },
-  { value: 'paragraph', label: '본문' },
-  { value: 'quote', label: '인용문' },
-  { value: 'caption', label: '캡션' },
-];
 
 const TextBlockView: React.FC<{
   block: Extract<PageBlock, { type: 'text' }>;
@@ -649,137 +641,186 @@ export const PublishingPagePreview: React.FC<{
           )
         ))}
 
-        {master.contentZones.map((zoneTemplate) => {
-          const zoneInstance = page.zones.find((item) => item.zoneId === zoneTemplate.id) ?? { zoneId: zoneTemplate.id, blocks: [] };
-          if (!zoneTemplate?.frame) {
-            return null;
-          }
+{(() => {
+          // 임시로 빈 함수를 사용 (나중에 prop으로 전달하도록 수정 예정)
+          const capturedHandleThreadOverflow = (threadId: string, overflowText: string, overflowStartOffset: number) => {
+            console.log('Thread overflow detected:', { threadId, overflowText, overflowStartOffset });
+            // TODO: 실제 overflow 처리 로직 구현
+          };
 
-          return (
-            <div
-              key={zoneInstance.zoneId}
-              className={`absolute ${mode === 'interactive' && printGuides.showContentBounds ? 'editor-guide border border-dashed border-slate-200' : ''}`}
-              style={{
-                left: zoneTemplate.frame.x,
-                top: zoneTemplate.frame.y,
-                width: zoneTemplate.frame.width,
-                height: zoneTemplate.frame.height,
-                overflow: 'hidden',
-                paddingTop: zoneTemplate.constraints.padding.top,
-                paddingRight: zoneTemplate.constraints.padding.right,
-                paddingBottom: zoneTemplate.constraints.padding.bottom,
-                paddingLeft: zoneTemplate.constraints.padding.left,
-              }}
-              onClick={() => {
-                if (mode === 'interactive' && !enableTemplateEditing) {
-                  onZoneActivate?.(zoneInstance.zoneId, zoneTemplate.kind);
-                }
-              }}
-            >
-              {mode === 'interactive' && enableTemplateEditing ? <div
-                data-html2canvas-ignore="true"
-                className={`absolute left-2 top-2 z-20 rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.15em] text-white/85 ${templateSelection.type === 'zone' && templateSelection.id === zoneTemplate.id ? 'bg-sky-600' : 'bg-slate-900'}`}
-                onPointerDown={(event) => {
-                  if (master.locked || zoneTemplate.scope === 'global-fixed' || zoneTemplate.locked) {
-                    return;
+          // flowGroupId별로 zone들을 그룹핑
+          const flowGroups = new Map<string, typeof master.contentZones>();
+          const standaloneZones: typeof master.contentZones = [];
+
+          master.contentZones.forEach((zoneTemplate) => {
+            if (!zoneTemplate?.frame) {
+              return;
+            }
+
+            if (zoneTemplate.flowGroupId) {
+              const existing = flowGroups.get(zoneTemplate.flowGroupId) || [];
+              existing.push(zoneTemplate);
+              flowGroups.set(zoneTemplate.flowGroupId, existing);
+            } else {
+              standaloneZones.push(zoneTemplate);
+            }
+          });
+
+          const renderedElements: React.ReactElement[] = [];
+
+          const handleOverflow = (threadId: string, overflowText: string, overflowStartOffset: number) => {
+            // 오버플로우 발생 시 다음 페이지에 동일 마스터로 자동 페이지 추가
+            capturedHandleThreadOverflow(threadId, overflowText, overflowStartOffset);
+          };
+
+          // FlowGroupContainer로 flowGroup 렌더링
+          flowGroups.forEach((zonesInGroup, flowGroupId) => {
+            if (!zonesInGroup.length) {
+              return;
+            }
+
+            renderedElements.push(
+              <FlowGroupContainer
+                key={`flowgroup-${flowGroupId}`}
+                zonesInGroup={zonesInGroup}
+                page={page}
+                document={document}
+                showContentBounds={mode === 'interactive' && printGuides.showContentBounds}
+                onOverflow={handleOverflow}
+              />
+            );
+          });
+
+          // standalone zone들은 기존 방식으로 렌더링
+          standaloneZones.forEach((zoneTemplate) => {
+            const zoneInstance = page.zones.find((item) => item.zoneId === zoneTemplate.id) ?? { zoneId: zoneTemplate.id, blocks: [] };
+
+            renderedElements.push(
+              <div
+                key={zoneInstance.zoneId}
+                className={`absolute ${mode === 'interactive' && printGuides.showContentBounds ? 'editor-guide border border-dashed border-slate-200' : ''}`}
+                style={{
+                  left: zoneTemplate.frame.x,
+                  top: zoneTemplate.frame.y,
+                  width: zoneTemplate.frame.width,
+                  height: zoneTemplate.frame.height,
+                  overflow: 'hidden',
+                  paddingTop: zoneTemplate.constraints.padding.top,
+                  paddingRight: zoneTemplate.constraints.padding.right,
+                  paddingBottom: zoneTemplate.constraints.padding.bottom,
+                  paddingLeft: zoneTemplate.constraints.padding.left,
+                }}
+                onClick={() => {
+                  if (mode === 'interactive' && !enableTemplateEditing) {
+                    onZoneActivate?.(zoneInstance.zoneId, zoneTemplate.kind);
                   }
-                  setTemplateSelection({ type: 'zone', id: zoneTemplate.id });
-                  bindPointerDrag(
-                    event,
-                    (deltaX, deltaY) => {
-                      const nextX = clamp(zoneTemplate.frame.x + deltaX, 0, pageSize.widthPx - 40);
-                      const nextY = clamp(zoneTemplate.frame.y + deltaY, 0, pageSize.heightPx - 40);
-                      const snapped = snapZoneFrame(nextX, nextY, zoneTemplate.frame.width, zoneTemplate.frame.height);
-                      updateMasterZoneFrame(master.id, zoneTemplate.id, snapped);
-                    },
-                    () => setActiveSnapGuides({ vertical: [], horizontal: [] }),
-                  );
                 }}
               >
-                {zoneTemplate.name}
-                {zoneTemplate.flowOrder ? ` · Flow ${zoneTemplate.flowOrder}` : ''}
-              </div> : null}
-              {mode === 'interactive' && enableTemplateEditing && !master.locked && zoneTemplate.scope !== 'global-fixed' && !zoneTemplate.locked ? <div
-                data-html2canvas-ignore="true"
-                className={`editor-handle absolute bottom-[-10px] right-[-10px] h-5 w-5 rounded-full border-2 border-white shadow ${templateSelection.type === 'zone' && templateSelection.id === zoneTemplate.id ? 'bg-sky-600' : 'bg-slate-900'}`}
-                onPointerDown={(event) => {
-                  setTemplateSelection({ type: 'zone', id: zoneTemplate.id });
-                  bindPointerDrag(event, (deltaX, deltaY) =>
-                    updateMasterZoneFrame(master.id, zoneTemplate.id, {
-                      width: clamp(zoneTemplate.frame.width + deltaX, 80, pageSize.widthPx - zoneTemplate.frame.x),
-                      height: clamp(zoneTemplate.frame.height + deltaY, 80, pageSize.heightPx - zoneTemplate.frame.y),
-                    }),
+                {mode === 'interactive' && enableTemplateEditing ? <div
+                  data-html2canvas-ignore="true"
+                  className={`absolute left-2 top-2 z-20 rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.15em] text-white/85 ${templateSelection.type === 'zone' && templateSelection.id === zoneTemplate.id ? 'bg-sky-600' : 'bg-slate-900'}`}
+                  onPointerDown={(event) => {
+                    if (master.locked || zoneTemplate.scope === 'global-fixed' || zoneTemplate.locked) {
+                      return;
+                    }
+                    setTemplateSelection({ type: 'zone', id: zoneTemplate.id });
+                    bindPointerDrag(
+                      event,
+                      (deltaX, deltaY) => {
+                        const nextX = clamp(zoneTemplate.frame.x + deltaX, 0, pageSize.widthPx - 40);
+                        const nextY = clamp(zoneTemplate.frame.y + deltaY, 0, pageSize.heightPx - 40);
+                        const snapped = snapZoneFrame(nextX, nextY, zoneTemplate.frame.width, zoneTemplate.frame.height);
+                        updateMasterZoneFrame(master.id, zoneTemplate.id, snapped);
+                      },
+                      () => setActiveSnapGuides({ vertical: [], horizontal: [] }),
                     );
-                }}
-              /> : null}
-              {zoneInstance.blocks.map((block) => {
-                const isSelected = selection.blockId === block.id;
+                  }}
+                >
+                  {zoneTemplate.name}
+                  {zoneTemplate.flowOrder ? ` · Flow ${zoneTemplate.flowOrder}` : ''}
+                </div> : null}
+                {mode === 'interactive' && enableTemplateEditing && !master.locked && zoneTemplate.scope !== 'global-fixed' && !zoneTemplate.locked ? <div
+                  data-html2canvas-ignore="true"
+                  className={`editor-handle absolute bottom-[-10px] right-[-10px] h-5 w-5 rounded-full border-2 border-white shadow ${templateSelection.type === 'zone' && templateSelection.id === zoneTemplate.id ? 'bg-sky-600' : 'bg-slate-900'}`}
+                  onPointerDown={(event) => {
+                    setTemplateSelection({ type: 'zone', id: zoneTemplate.id });
+                    bindPointerDrag(event, (deltaX, deltaY) =>
+                      updateMasterZoneFrame(master.id, zoneTemplate.id, {
+                        width: clamp(zoneTemplate.frame.width + deltaX, 80, pageSize.widthPx - zoneTemplate.frame.x),
+                        height: clamp(zoneTemplate.frame.height + deltaY, 80, pageSize.heightPx - zoneTemplate.frame.y),
+                      }),
+                      );
+                  }}
+                /> : null}
+                {zoneInstance.blocks.map((block) => {
+                  const isSelected = selection.blockId === block.id;
 
-                if (block.type === 'image') {
+                  if (block.type === 'image') {
+                    return (
+                      <ImageBlockView
+                        key={block.id}
+                        block={block}
+                        selected={isSelected}
+                        onSelect={() => {
+                          selectBlock(page.id, zoneInstance.zoneId, block.id);
+                        }}
+                        onMove={(deltaX, deltaY) =>
+                          updateImageBlock(page.id, zoneInstance.zoneId, block.id, {
+                            placement: {
+                              ...block.placement,
+                              x: clamp(block.placement.x + deltaX, 0, zoneTemplate.frame.width - 40),
+                              y: clamp(block.placement.y + deltaY, 0, zoneTemplate.frame.height - 40),
+                            },
+                          })
+                        }
+                        onResize={(deltaX, deltaY) =>
+                          updateImageBlock(page.id, zoneInstance.zoneId, block.id, {
+                            placement: {
+                              ...block.placement,
+                              width: clamp(block.placement.width + deltaX, 80, zoneTemplate.frame.width - block.placement.x),
+                              height: clamp(block.placement.height + deltaY, 80, zoneTemplate.frame.height - block.placement.y),
+                            },
+                          })
+                        }
+                      />
+                    );
+                  }
+
                   return (
-                    <ImageBlockView
+                    <div
                       key={block.id}
-                      block={block}
-                      selected={isSelected}
-                      onSelect={() => {
+                      onClick={(event) => {
+                        event.stopPropagation();
                         selectBlock(page.id, zoneInstance.zoneId, block.id);
+                        onTextBlockOpen(block.flow.sourceThreadId);
                       }}
-                      onMove={(deltaX, deltaY) =>
-                        updateImageBlock(page.id, zoneInstance.zoneId, block.id, {
-                          placement: {
-                            ...block.placement,
-                            x: clamp(block.placement.x + deltaX, 0, zoneTemplate.frame.width - 40),
-                            y: clamp(block.placement.y + deltaY, 0, zoneTemplate.frame.height - 40),
-                          },
-                        })
-                      }
-                      onResize={(deltaX, deltaY) =>
-                        updateImageBlock(page.id, zoneInstance.zoneId, block.id, {
-                          placement: {
-                            ...block.placement,
-                            width: clamp(block.placement.width + deltaX, 80, zoneTemplate.frame.width - block.placement.x),
-                            height: clamp(block.placement.height + deltaY, 80, zoneTemplate.frame.height - block.placement.y),
-                          },
-                        })
-                      }
-                    />
+                      className={`cursor-text rounded-md transition ${isSelected ? 'editor-selection-ring ring-2 ring-amber-400 ring-offset-2' : ''}`}
+                      style={{
+                        maxWidth: '100%',
+                        overflow: 'hidden',
+                      }}
+                    >
+                      <TextBlockView block={block} zoneStyle={zoneTemplate.style} />
+                    </div>
                   );
-                }
+                })}
+              </div>
+            );
+          });
 
-                return (
-                  <div
-                    key={block.id}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      selectBlock(page.id, zoneInstance.zoneId, block.id);
-                      onTextBlockOpen(block.flow.sourceThreadId);
-                    }}
-                    className={`cursor-text rounded-md transition ${isSelected ? 'editor-selection-ring ring-2 ring-amber-400 ring-offset-2' : ''}`}
-                    style={{
-                      maxWidth: '100%',
-                      overflow: 'hidden',
-                    }}
-                  >
-                    <TextBlockView block={block} zoneStyle={zoneTemplate.style} />
-                  </div>
-                );
-              })}
-            </div>
-          );
-        })}
+          return renderedElements;
+        })()}
       </div>
     </div>
   );
 };
 
 const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicationId }) => {
-  const domDocument = window.document;
   const {
     document,
     selection,
     history,
     autosave,
-    pagination,
     selectPage,
     addPage,
     deletePage,
@@ -802,14 +843,13 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
     toggleMasterDecorationLock,
     toggleMasterZoneLock,
     updateThreadText,
-    updateThreadRole,
     toggleThreadToc,
     deleteThread,
     addThreadWithText,
+    addThreadsFromParsedContent,
     addImageBlock,
     updateImageBlock,
     toggleBlockLock,
-    applyPaginationResult,
     undo,
     redo,
   } = usePublishingStore();
@@ -836,30 +876,13 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
   const [activeContentZoneId, setActiveContentZoneId] = useState<string | null>(null);
   const [pageJumpInput, setPageJumpInput] = useState('');
   const [importingDocx, setImportingDocx] = useState(false);
+  const [useAIParsing, setUseAIParsing] = useState(true);
+  const [testingAI, setTestingAI] = useState(false);
   const pageRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const pdfPageRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const measurementRootRef = useRef<HTMLDivElement | null>(null);
 
-  useEffect(() => {
-    if (!measurementRootRef.current || !pagination.invalidatedThreadIds.length) {
-      return;
-    }
 
-    const measure = () => {
-      pagination.invalidatedThreadIds.forEach((threadId) => {
-        try {
-          const segments = paginateThreadWithDom(document, threadId, measurementRootRef.current!);
-          if (segments.length) {
-            applyPaginationResult(threadId, segments);
-          }
-        } catch (error) {
-          logError(error, `PublishingEditor-pagination:${threadId}`);
-        }
-      });
-    };
-
-    domDocument.fonts.ready.then(measure);
-  }, [applyPaginationResult, document, pagination.invalidatedThreadIds]);
 
   const selectedPage = document.pages.find((item) => item.id === selection.pageId) ?? document.pages[1] ?? document.pages[0];
   const pageMaster = document.masters.items.find((item) => item.id === selectedPage?.masterId) ?? document.masters.items[0];
@@ -1075,9 +1098,30 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
 
     try {
       setImportingDocx(true);
-      const parsed = await parseDocxManuscript(file);
+      const parsed = await parseDocxManuscriptWithAI(file, useAIParsing);
       const rootPageId = getChainRootPageId(document, selectedPage.id);
       let applied = 0;
+
+      // AI 파싱이 성공한 경우
+      if (useAIParsing && parsed.aiParsedContent && !parsed.aiParsingError) {
+        const threadsData = parsed.aiParsedContent.map(thread => ({
+          text: thread.text,
+          role: thread.role,
+        }));
+
+        const createdThreadIds = addThreadsFromParsedContent(rootPageId, threadsData);
+        applied = createdThreadIds.length;
+
+        if (applied > 0) {
+          showToast(`AI로 파싱한 컨텐츠 ${applied}개 반영 완료`, 'success');
+          return;
+        }
+      }
+
+      // AI 파싱 실패 또는 비활성화 시 기존 방식 사용
+      if (parsed.aiParsingError) {
+        showToast(`AI 파싱 실패: ${parsed.aiParsingError}. 기본 파싱으로 진행합니다.`, 'info');
+      }
 
       parsed.slots.forEach((slot) => {
         const zone = findImportTargetZone(slot.slotKey);
@@ -1102,6 +1146,18 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
       showToast('워드 원고 분석에 실패했습니다.', 'error');
     } finally {
       setImportingDocx(false);
+    }
+  };
+
+  const handleTestAIConnection = async () => {
+    try {
+      setTestingAI(true);
+      const isConnected = await glmClient.testConnection();
+      showToast(isConnected ? 'AI 엔진 연결 성공!' : 'AI 엔진 연결 실패', isConnected ? 'success' : 'error');
+    } catch (error) {
+      showToast(`AI 연결 오류: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error');
+    } finally {
+      setTestingAI(false);
     }
   };
   const selectedBlock = useMemo(() => {
@@ -1695,6 +1751,23 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
               >
                 <TrashIcon className="h-4 w-4" />
                 페이지 삭제
+              </button>
+              <label className="inline-flex items-center gap-2 rounded-full border border-slate-200 px-4 py-2 text-sm font-medium">
+                <input
+                  type="checkbox"
+                  checked={useAIParsing}
+                  onChange={(e) => setUseAIParsing(e.target.checked)}
+                  className="h-4 w-4 rounded border-gray-300"
+                />
+                AI 파싱
+              </label>
+              <button
+                type="button"
+                onClick={handleTestAIConnection}
+                disabled={testingAI}
+                className={`inline-flex items-center gap-2 rounded-full border border-blue-200 px-4 py-2 text-sm font-medium ${testingAI ? 'cursor-wait opacity-60' : 'text-blue-700 hover:bg-blue-50'}`}
+              >
+                GLM 연결 테스트
               </button>
               <label className={`inline-flex items-center gap-2 rounded-full border border-slate-200 px-4 py-2 text-sm font-medium ${importingDocx ? 'cursor-wait opacity-60' : 'cursor-pointer'}`}>
                 <PlusIcon className="h-4 w-4" />
@@ -2365,19 +2438,11 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
                   {thread ? `${thread.zoneSequence.length} page` : '비어 있음'}
                 </span>
               </div>
-              {thread ? (
-                <div className="mb-3 flex gap-2">
-                  <select
-                    value={thread.semanticRole}
-                    onChange={(event) => updateThreadRole(thread.id, event.target.value as TextRole)}
-                    className="flex-1 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none"
-                  >
-                    {roleOptions.map((option) => (
-                      <option key={option.value} value={option.value}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
+              <div className="mb-3 flex gap-2">
+                <span className="rounded-full bg-white px-3 py-2 text-xs text-slate-500">
+                  {thread ? roleLabel[thread.semanticRole] : ''}
+                </span>
+                {thread ? (
                   <button
                     type="button"
                     onClick={() => toggleThreadToc(thread.id)}
@@ -2387,8 +2452,8 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
                   >
                     TOC {thread.ebook.toc.enabled ? 'ON' : 'OFF'}
                   </button>
-                </div>
-              ) : null}
+                ) : null}
+              </div>
               <div className="max-h-44 overflow-hidden rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700">
                 {thread ? getThreadPlainText(document, thread.id).trim() || '내용 없음' : '아직 내용 없음'}
               </div>

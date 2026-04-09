@@ -1,5 +1,6 @@
 import mammoth from 'mammoth';
 import { TextRole } from '@/types/publishing';
+import { contentParser, ContentThread } from '../ai/contentParser';
 
 export interface ImportedSlotDraft {
   slotKey: string;
@@ -104,4 +105,41 @@ export const parseDocxManuscript = async (file: File): Promise<ParsedDocxManuscr
     rawText,
     slots: buildBilingualAbstractSlots(lines),
   };
+};
+
+export interface ParsedDocxManuscriptWithAI {
+  rawText: string;
+  slots: ImportedSlotDraft[];
+  aiParsedContent?: ContentThread[];
+  aiParsingError?: string;
+}
+
+export const parseDocxManuscriptWithAI = async (
+  file: File,
+  useAI: boolean = true
+): Promise<ParsedDocxManuscriptWithAI> => {
+  const arrayBuffer = await file.arrayBuffer();
+  const { value } = await mammoth.extractRawText({ arrayBuffer });
+  const rawText = value.trim();
+  const lines = compactLines(rawText);
+
+  // 기본 파싱 결과
+  const result: ParsedDocxManuscriptWithAI = {
+    rawText,
+    slots: buildBilingualAbstractSlots(lines),
+  };
+
+  // AI 파싱 시도
+  if (useAI) {
+    try {
+      const parsedContent = await contentParser.parseDocumentContent(rawText);
+      const threads = contentParser.convertToThreads(parsedContent);
+      result.aiParsedContent = threads;
+    } catch (error) {
+      result.aiParsingError = error instanceof Error ? error.message : 'AI 파싱 중 알 수 없는 오류가 발생했습니다';
+      console.warn('AI parsing failed, falling back to basic parsing:', error);
+    }
+  }
+
+  return result;
 };

@@ -109,6 +109,7 @@ interface PublishingStore extends PublishingEditorState {
   deleteThread: (threadId: string) => void;
   addThread: (pageId: string, zoneId: string, role?: TextRole) => void;
   addThreadWithText: (pageId: string, zoneId: string, text: string, role?: TextRole) => string | null;
+  addThreadsFromParsedContent: (pageId: string, threads: Array<{ text: string; role: TextRole }>) => string[];
   addImageBlock: (
     pageId: string,
     zoneId: string,
@@ -143,6 +144,7 @@ interface PublishingStore extends PublishingEditorState {
   toggleBlockLock: (pageId: string, zoneId: string, blockId: string) => void;
   applyPaginationResult: (threadId: string, segments: PaginationSegmentPlacement[]) => void;
   repaginateInvalidatedThreads: () => void;
+  handleThreadOverflow: (threadId: string, overflowText: string, overflowStartOffset: number) => void;
   markSaving: () => void;
   markSaved: () => void;
   markSaveFailed: (message: string) => void;
@@ -547,7 +549,8 @@ const sanitizePublishingDocument = (document: PublishingDocument): PublishingDoc
     .map((thread) => {
       const sourcePage = nextDocument.pages.find((page) => page.id === thread.sourcePageId);
       if (!sourcePage) {
-        return thread;
+        // 초기 로드시 스레드만 설정하고 페이지네이션은 DOM useEffect에서 처리
+      return thread;
       }
 
       const rootPageId = getChainRootPageId(nextDocument, sourcePage.id);
@@ -597,12 +600,10 @@ const sanitizePublishingDocument = (document: PublishingDocument): PublishingDoc
     return nextDocument;
   }
 
-  const repaginated = repaginateDocument(
-    nextDocument,
-    nextDocument.threads.map((thread) => thread.id),
-  );
-  syncTocFromThreads(repaginated);
-  return repaginated;
+  // 페이지네이션은 DOM 기반(paginateThreadWithDom)에서만 수행
+  // 추정 기반 repaginateDocument는 렌더링 정확도가 떨어지므로 제거
+  syncTocFromThreads(nextDocument);
+  return nextDocument;
 };
 
 const pushHistoryEntry = (
@@ -2260,6 +2261,159 @@ export const usePublishingStore = create<PublishingStore>()((set) => ({
         },
       };
     }),
+
+  addThreadsFromParsedContent: (pageId, threads) => {
+    const createdThreadIds: string[] = [];
+
+    set((state) => {
+      const nextDocument = clone(state.document);
+      const page = nextDocument.pages.find((item) => item.id === pageId);
+      if (!page) {
+        return state;
+      }
+
+      const rootPageId = getChainRootPageId(nextDocument, pageId);
+      const rootPage = nextDocument.pages.find((item) => item.id === rootPageId) ?? page;
+
+      // 현재 페이지의 마스터에서 text-flow 존을 찾기
+      const master = nextDocument.masters.items.find((m) => m.id === rootPage.masterId);
+      if (!master) {
+        return state;
+      }
+
+      const textFlowZones = master.contentZones.filter((zone) => zone.kind === 'text-flow');
+      if (!textFlowZones.length) {
+        return state;
+      }
+
+      // 각 thread에 대해 적절한 zone에 배치
+      let zoneIndex = 0;
+      const invalidatedThreadIds: string[] = [];
+
+      for (const threadData of threads) {
+        const newThreadId = `ai_thread_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+        const newBlockId = `${newThreadId}_seg_000`;
+
+        // zone 순환 (같은 thread는 연속으로 배치)
+        const currentZone = textFlowZones[zoneIndex % textFlowZones.length];
+
+        nextDocument.threads.push({
+          id: newThreadId,
+          type: 'text-flow',
+          canonicalText: [{ text: threadData.text }],
+          semanticRole: threadData.role,
+          styleOverride: getRoleStyleOverride(threadData.role),
+          ebook: {
+            include: true,
+            toc: {
+              enabled: threadData.role === 'heading' || threadData.role === 'subheading',
+            },
+          },
+          originBlockId: newBlockId,
+          sourceZoneId: currentZone.id,
+          sourcePageId: rootPage.id,
+          zoneSequence: [{ pageId: rootPage.id, zoneId: currentZone.id }],
+        });
+
+        createdThreadIds.push(newThreadId);
+        invalidatedThreadIds.push(newThreadId);
+        zoneIndex++;
+      }
+
+      syncTocFromThreads(nextDocument);
+      nextDocument.meta.updatedAt = new Date().toISOString();
+      const next = pushHistoryEntry(state, `Add ${threads.length} AI-parsed threads`, nextDocument);
+
+      return {
+        document: nextDocument,
+        pagination: {
+          ...state.pagination,
+          invalidatedThreadIds: Array.from(new Set([...state.pagination.invalidatedThreadIds, ...invalidatedThreadIds])),
+        },
+        selection: state.selection,
+        ...next,
+      };
+    });
+
+    return createdThreadIds;
+  },
+
+  handleThreadOverflow: (threadId, overflowText, overflowStartOffset) => {
+    set((state) => {
+      const nextDocument = clone(state.document);
+      const thread = nextDocument.threads.find((t) => t.id === threadId);
+      if (!thread || !overflowText) {
+        return state;
+      }
+
+      // 현재 thread의 텍스트를 오버플로우 지점에서 분할
+      const fullText = thread.canonicalText.map((r) => r.text).join('');
+      const beforeOverflow = fullText.slice(0, overflowStartOffset);
+      const afterOverflow = overflowText;
+
+      // 기존 thread는 오버플로우 전까지만 유지
+      thread.canonicalText = [{ text: beforeOverflow }];
+
+      // 같은 thread가 계속되는 경우: 현재 마스터로 새 페이지 생성
+      const sourcePage = nextDocument.pages.find((p) => p.id === thread.sourcePageId);
+      if (!sourcePage) {
+        return state;
+      }
+
+      const newPageId = createId('page');
+      const newPage: PublishingDocument['pages'][number] = {
+        id: newPageId,
+        pageNumber: Math.max(...nextDocument.pages.map(p => p.pageNumber)) + 1,
+        masterId: sourcePage.masterId,
+        pageRole: sourcePage.pageRole,
+        zones: [],
+        derivedFrom: {
+          reason: 'auto-pagination',
+          previousPageId: sourcePage.id,
+        },
+      };
+
+      nextDocument.pages.push(newPage);
+
+      // 오버플로우된 텍스트로 새 thread 생성
+      const newThreadId = `${threadId}_overflow_${Date.now()}`;
+      const newBlockId = `${newThreadId}_seg_000`;
+
+      const newThread: PublishingDocument['threads'][number] = {
+        id: newThreadId,
+        type: 'text-flow',
+        canonicalText: [{ text: afterOverflow }],
+        semanticRole: thread.semanticRole,
+        styleOverride: thread.styleOverride,
+        ebook: thread.ebook,
+        originBlockId: newBlockId,
+        sourceZoneId: thread.sourceZoneId,
+        sourcePageId: newPageId,
+        zoneSequence: [{ pageId: newPageId, zoneId: thread.sourceZoneId }],
+      };
+
+      nextDocument.threads.push(newThread);
+
+      const invalidatedThreadIds = Array.from(new Set([
+        ...state.pagination.invalidatedThreadIds,
+        threadId,
+        newThreadId,
+      ]));
+
+      nextDocument.meta.updatedAt = new Date().toISOString();
+      const next = pushHistoryEntry(state, `Auto-paginate thread ${threadId}`, nextDocument);
+
+      return {
+        document: nextDocument,
+        pagination: {
+          ...state.pagination,
+          invalidatedThreadIds,
+        },
+        selection: state.selection,
+        ...next,
+      };
+    });
+  },
 }));
 
 usePublishingStore.subscribe((state) => {
