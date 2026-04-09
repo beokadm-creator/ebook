@@ -33,24 +33,21 @@ const LoginPage: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-mesh dark:bg-slate-950 px-4 py-12 relative overflow-hidden">
-      {/* Decorative blobs */}
-      <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-brand-primary/20 rounded-full mix-blend-multiply filter blur-3xl opacity-70 animate-blob"></div>
-      <div className="absolute top-1/3 right-1/4 w-96 h-96 bg-brand-secondary/20 rounded-full mix-blend-multiply filter blur-3xl opacity-70 animate-blob animation-delay-2000"></div>
-      <div className="absolute bottom-1/4 left-1/3 w-96 h-96 bg-pink-300/20 rounded-full mix-blend-multiply filter blur-3xl opacity-70 animate-blob animation-delay-4000"></div>
-
-      <div className="relative max-w-md w-full space-y-8 glass-effect rounded-[2.5rem] p-10 md:p-12 shadow-2xl border border-white/20 dark:border-white/5">
-        {/* 헤더 */}
-        <div className="text-center">
-          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-brand-primary to-brand-secondary mb-6 shadow-lg shadow-brand-primary/30">
-            <LockClosedIcon className="w-8 h-8 text-white" />
+    <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-[#12172b] px-4 py-12 relative">
+      <div className="relative max-w-md w-full space-y-6 bg-white dark:bg-gray-900 rounded-3xl p-8 md:p-10 shadow-sm border border-gray-100 dark:border-gray-800">
+        {/* 헤더 - 학술적 권위 */}
+        <div className="text-center space-y-4">
+          <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-[#1a2744] dark:bg-[#243660] shadow-sm">
+            <LockClosedIcon className="w-7 h-7 text-white" />
           </div>
-          <h2 className="text-4xl font-black tracking-tight text-gray-900 dark:text-white mb-2">
-            EBOOK <span className="text-gradient">STUDIO</span>
-          </h2>
-          <p className="text-gray-500 dark:text-gray-400 font-medium">
-            관리자 보안 로그인
-          </p>
+          <div>
+            <h2 className="text-2xl font-bold tracking-tight text-[#1a2744] dark:text-white mb-1">
+              관리자 로그인
+            </h2>
+            <p className="text-sm text-gray-500 dark:text-gray-400 font-normal">
+              초록집 관리 시스템
+            </p>
+          </div>
         </div>
 
         {/* 로그인 폼 */}

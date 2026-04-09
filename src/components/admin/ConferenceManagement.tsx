@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { collection, getDocs, addDoc, updateDoc, deleteDoc, doc, query, orderBy } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import PublicationManagement from './PublicationManagement';
@@ -6,6 +6,9 @@ import { Conference, BilingualValue } from '@/types/content';
 import { useBrandingStore } from '@/stores/brandingStore';
 import { showToast } from '@/components/common/Toast';
 import BilingualInput from '@/components/common/BilingualInput';
+import { logger } from '@/lib/logger';
+import { getLocalValue as getLocalBilingualValue } from '@/utils/bilingualHelpers';
+import { formatDate as formatKoreanDate } from '@/utils/dateHelpers';
 import {
   PlusIcon,
   PencilIcon,
@@ -43,7 +46,7 @@ export const ConferenceManagement: React.FC = () => {
       } as Conference));
       setConferences(conferencesData);
     } catch (error) {
-      console.error('Failed to load conferences:', error);
+      logger.error('Failed to load conferences', { context: 'admin', error });
     } finally {
       setLoading(false);
     }
@@ -60,7 +63,7 @@ export const ConferenceManagement: React.FC = () => {
       setShowForm(false);
       showToast('새 프로젝트가 등록되었습니다.', 'success');
     } catch (error) {
-      console.error('Failed to create conference:', error);
+      logger.error('Failed to create conference', { context: 'admin', error });
       showToast('학술대회 생성에 실패했습니다.', 'error');
     }
   };
@@ -79,7 +82,7 @@ export const ConferenceManagement: React.FC = () => {
       setEditingConference(null);
       showToast('프로젝트 정보가 수정되었습니다.', 'success');
     } catch (error) {
-      console.error('Failed to update conference:', error);
+      logger.error('Failed to update conference', { context: 'admin', error });
       showToast('학술대회 업데이트에 실패했습니다.', 'error');
     }
   };
@@ -92,24 +95,15 @@ export const ConferenceManagement: React.FC = () => {
       await loadConferences();
       showToast('프로젝트가 삭제되었습니다.', 'success');
     } catch (error) {
-      console.error('Failed to delete conference:', error);
+      logger.error('Failed to delete conference', { context: 'admin', error });
       showToast('학술대회 삭제에 실패했습니다.', 'error');
     }
   };
 
-  const formatDate = (dateString: string) => {
-    if (!dateString) return '-';
-    return new Date(dateString).toLocaleDateString('ko-KR', {
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric'
-    });
-  };
-
-  const getLocalName = (name: BilingualValue): string => {
-    if (!name) return '';
-    return typeof name === 'string' ? name : name.ko || name.en || '';
-  };
+  const selectedConference = useMemo(
+    () => conferences.find(c => c.id === selectedConferenceId),
+    [conferences, selectedConferenceId]
+  );
 
   if (loading) {
     return (
@@ -126,45 +120,46 @@ export const ConferenceManagement: React.FC = () => {
       {/* 사이드바 */}
       <aside className="w-72 bg-white dark:bg-gray-900 border-r border-gray-200 dark:border-gray-800 flex flex-col fixed h-full z-30">
         <div className="p-8">
-          <div className="flex items-center gap-3 mb-10">
-            <div className="w-10 h-10 bg-brand-primary rounded-xl flex items-center justify-center text-white shadow-lg shadow-brand-primary/20">
-              <span className="font-black text-xl">E</span>
+          <div className="flex items-center gap-3 mb-8">
+            <div className="w-10 h-10 rounded-xl bg-[#1a2744] dark:bg-[#243660] flex items-center justify-center shadow-sm">
+              <span className="font-bold text-lg text-white">E</span>
             </div>
-            <span className="font-black text-xl tracking-tighter text-gray-900 dark:text-white uppercase">Admin</span>
+            <span className="font-bold text-lg tracking-tight text-[#1a2744] dark:text-white">관리자</span>
           </div>
 
           <button
             onClick={() => setShowForm(true)}
-            className="w-full flex items-center justify-center gap-2 px-6 py-4 bg-gradient-to-r from-brand-primary to-brand-secondary hover:from-brand-primary-hover hover:to-brand-secondary text-white rounded-2xl font-bold transition-all shadow-lg shadow-brand-primary/20 hover:shadow-brand-primary/30 mb-8 active:scale-95"
+            className="w-full flex items-center justify-center gap-2 px-6 py-3.5 bg-[#1a2744] hover:bg-[#243660] dark:bg-[#243660] dark:hover:bg-[#2d4a7c] text-white rounded-xl font-semibold transition-all shadow-sm mb-6"
           >
-            <PlusIcon className="w-5 h-5" strokeWidth={2.5} />
-            새 프로젝트 추가
+            <PlusIcon className="w-5 h-5" strokeWidth={2} />
+            새 프로젝트
           </button>
 
           <nav className="space-y-1">
             <button
               onClick={() => setSelectedConferenceId(null)}
-              className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl font-bold transition-all ${
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg font-medium transition-all ${
                 !selectedConferenceId 
-                  ? 'bg-brand-primary/10 text-brand-primary' 
-                  : 'text-gray-500 hover:bg-gray-50 dark:hover:bg-gray-800'
+                  ? 'bg-[#e8edf5] dark:bg-[#1a2744]/20 text-[#1a2744] dark:text-white' 
+                  : 'text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800'
               }`}
             >
               <RectangleStackIcon className="w-5 h-5" />
-              학술대회 목록
+              프로젝트 목록
             </button>
             {selectedConferenceId && (
               <div className="mt-4 pt-4 border-t border-gray-100 dark:border-gray-800 space-y-1">
-                <div className="px-4 py-2 text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">
-                  Managing Project
+                <div className="px-4 py-2 text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">
+                  선택된 프로젝트
                 </div>
-                <div className="px-4 py-3 bg-gray-50 dark:bg-gray-800/50 rounded-xl mb-2">
-                  <p className="text-sm font-bold text-gray-900 dark:text-gray-100 truncate">
-                    {getLocalName(conferences.find(c => c.id === selectedConferenceId)?.name || {ko: '', en: ''})}
+                <div className="px-4 py-3 bg-gray-50 dark:bg-gray-800/50 rounded-lg mb-2">
+                  <p className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">
+                    {getLocalBilingualValue(selectedConference?.name || {ko: '', en: ''})}
                   </p>
                 </div>
                 <button
-                  className="w-full flex items-center gap-3 px-4 py-3.5 rounded-xl font-bold text-brand-primary bg-brand-primary/5"
+                  onClick={() => {}}
+                  className="w-full flex items-center gap-3 px-4 py-3 rounded-lg font-medium text-[#1a2744] dark:text-white bg-[#e8edf5] dark:bg-[#1a2744]/10"
                 >
                   <BookOpenIcon className="w-5 h-5" />
                   간행물 관리
@@ -195,7 +190,7 @@ export const ConferenceManagement: React.FC = () => {
                   간행물 관리
                 </h2>
                 <p className="text-gray-500 dark:text-gray-400 mt-2 font-medium">
-                  {getLocalName(conferences.find(c => c.id === selectedConferenceId)?.name || {ko: '', en: ''})} 학회의 모든 자료를 편집합니다.
+                  {getLocalBilingualValue(selectedConference?.name || {ko: '', en: ''})} 학회의 모든 자료를 편집합니다.
                 </p>
               </header>
               <PublicationManagement 
@@ -206,11 +201,11 @@ export const ConferenceManagement: React.FC = () => {
           ) : (
             <div className="space-y-10 animate-fade-in-up">
               <header>
-                <h2 className="text-4xl font-black text-gray-900 dark:text-white tracking-tight">
-                  프로젝트 대시보드
+                <h2 className="text-3xl font-bold text-[#1a2744] dark:text-white tracking-tight">
+                  프로젝트
                 </h2>
-                <p className="text-gray-500 dark:text-gray-400 mt-2 font-medium">
-                  현재 운영 중인 전체 학술대회 정보를 조회하고 편집할 수 있습니다.
+                <p className="text-gray-500 dark:text-gray-400 text-sm mt-2 font-normal">
+                  운영 중인 학술대회를 관리합니다
                 </p>
               </header>
 
@@ -219,26 +214,26 @@ export const ConferenceManagement: React.FC = () => {
                   <div
                     key={conference.id}
                     onClick={() => setSelectedConferenceId(conference.id)}
-                    className="group relative bg-white dark:bg-gray-900 rounded-[2.5rem] border border-gray-100 dark:border-gray-800 overflow-hidden card-hover cursor-pointer p-8 flex flex-col h-full shadow-sm hover:shadow-xl hover:shadow-gray-200/50 dark:hover:shadow-black/50 transition-all duration-300"
+                    className="group relative bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-700 overflow-hidden cursor-pointer p-6 flex flex-col h-full shadow-sm hover:shadow-md transition-all duration-200"
                   >
-                    <div className="flex justify-between items-start mb-6">
-                      <div className="w-14 h-14 rounded-2xl bg-gray-50 dark:bg-gray-800 flex items-center justify-center text-brand-primary group-hover:bg-brand-primary group-hover:text-white transition-all duration-300">
-                        <CalendarIcon className="w-7 h-7" />
+                    <div className="flex justify-between items-start mb-5">
+                      <div className="w-12 h-12 rounded-xl bg-[#e8edf5] dark:bg-[#1a2744]/10 flex items-center justify-center text-[#1a2744] dark:text-[#243660] group-hover:bg-[#1a2744] group-hover:text-white transition-all duration-200">
+                        <CalendarIcon className="w-6 h-6" />
                       </div>
-                      <div className={`px-4 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest ${
+                      <div className={`px-3 py-1 rounded-full text-xs font-semibold tracking-wide ${
                         conference.status === 'published'
-                          ? 'bg-green-100 text-green-700 dark:bg-green-500/10 dark:text-green-400'
-                          : 'bg-yellow-100 text-yellow-700 dark:bg-yellow-500/10 dark:text-yellow-400'
+                          ? 'bg-green-50 dark:bg-green-500/10 text-green-700 dark:text-green-400'
+                          : 'bg-yellow-50 dark:bg-yellow-500/10 text-yellow-700 dark:text-yellow-400'
                       }`}>
                         {conference.status === 'published' ? 'Published' : 'Draft'}
                       </div>
                     </div>
 
                     <h3 className="text-2xl font-bold text-gray-900 dark:text-white mb-2 line-clamp-2 leading-tight">
-                      {getLocalName(conference.name)}
+                      {getLocalBilingualValue(conference.name)}
                     </h3>
                     <p className="text-sm text-gray-500 dark:text-gray-500 mb-6 font-medium">
-                      {formatDate(conference.startDate)} ~ {formatDate(conference.endDate)}
+                      {formatKoreanDate(conference.startDate)} ~ {formatKoreanDate(conference.endDate)}
                     </p>
 
                     <div className="mt-auto flex items-center justify-between pt-6 border-t border-gray-50 dark:border-gray-800">

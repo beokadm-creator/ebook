@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { AuthProvider } from './contexts/AuthContext';
 import ProtectedRoute from './components/auth/ProtectedRoute';
+import { OnlineOnly } from './components/auth/OnlineOnly';
 import LoginPage from './components/auth/LoginPage';
 import ConferenceList from './components/lobby/ConferenceList';
 import ConferenceDetail from './components/lobby/ConferenceDetail';
@@ -24,8 +25,16 @@ function AppRoutes() {
       <Route path="/conferences/:conferenceId" element={<ConferenceDetail />} />
       <Route path="/viewer/:publicationId" element={<ViewerPage />} />
       <Route path="/mypage" element={<MyPage />} />
-      <Route path="/editor/:publicationId" element={<EditorPage />} />
-      <Route path="/studio/:publicationId" element={<MasterStudioPage />} />
+      <Route path="/editor/:publicationId" element={
+        <OnlineOnly>
+          <EditorPage />
+        </OnlineOnly>
+      } />
+      <Route path="/studio/:publicationId" element={
+        <OnlineOnly>
+          <MasterStudioPage />
+        </OnlineOnly>
+      } />
       <Route path="/admin" element={<ProtectedRoute><ConferenceManagement /></ProtectedRoute>} />
       <Route path="*" element={
         <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900 px-4">

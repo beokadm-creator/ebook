@@ -18,8 +18,8 @@ import {
 
 interface PublicationCardProps {
   publication: Publication;
-  formatDate: (v: any) => string;
-  getLocalText: (v: any) => string;
+  formatDate: (v: string) => string;
+  getLocalText: (v: string) => string;
   getPublicationTypeLabel: (v: string) => string;
 }
 
@@ -143,7 +143,7 @@ const ConferenceDetail: React.FC = () => {
     fetchConferenceData();
   }, [conferenceId, setBranding]);
 
-  const formatDate = (value: any) => {
+  const formatDate = (value: string) => {
     if (!value) return '날짜 정보 없음';
     let date: Date;
     if (value instanceof Date) date = value;

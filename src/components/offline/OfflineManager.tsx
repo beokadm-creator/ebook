@@ -2,7 +2,6 @@ import React, { useState, useEffect } from 'react';
 import { 
   WifiIcon,
   SignalSlashIcon,
-  CloudArrowDownIcon,
   XMarkIcon
 } from '@heroicons/react/24/outline';
 
@@ -16,7 +15,6 @@ export const OfflineManager: React.FC<OfflineManagerProps> = ({ children }) => {
   const [isOnline, setIsOnline] = useState(true);
   const [showOfflineMessage, setShowOfflineMessage] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('online');
-  const [pendingSync, setPendingSync] = useState(0);
 
   useEffect(() => {
     // 초기 온라인 상태 확인
@@ -49,52 +47,6 @@ export const OfflineManager: React.FC<OfflineManagerProps> = ({ children }) => {
       window.removeEventListener('offline', handleOffline);
     };
   }, []);
-
-  // 로컬 스토리지에서 대기 중인 동기화 작업 수 확인
-  useEffect(() => {
-    const checkPendingSync = () => {
-      try {
-        const pendingActions = localStorage.getItem('pendingSyncActions');
-        if (pendingActions) {
-          const actions = JSON.parse(pendingActions);
-          setPendingSync(actions.length);
-        }
-      } catch (error) {
-        console.error('Failed to check pending sync:', error);
-      }
-    };
-
-    checkPendingSync();
-    const interval = setInterval(checkPendingSync, 5000);
-
-    return () => clearInterval(interval);
-  }, []);
-
-  const syncPendingData = async () => {
-    // 오프라인 중인 변경사항 동기화
-    try {
-      const pendingActions = localStorage.getItem('pendingSyncActions');
-      if (!pendingActions) return;
-
-      const actions = JSON.parse(pendingActions);
-      
-      // TODO: 각 액션을 서버에 동기화
-      for (const action of actions) {
-        await syncAction(action);
-      }
-
-      // 동기화 완료 후 로컬 스토리지 정리
-      localStorage.removeItem('pendingSyncActions');
-      setPendingSync(0);
-    } catch (error) {
-      console.error('Failed to sync pending data:', error);
-    }
-  };
-
-  const syncAction = async (action: any) => { // eslint-disable-line @typescript-eslint/no-explicit-any
-    // TODO: 실제 동기화 로직 구현
-    void action;
-  };
 
   return (
     <>
@@ -135,18 +87,9 @@ export const OfflineManager: React.FC<OfflineManagerProps> = ({ children }) => {
                     : 'text-green-700 dark:text-green-300'
                 }`}>
                   {connectionStatus === 'offline'
-                    ? '인터넷 연결이 없습니다. 오프라인 모드로 작동 중입니다.'
+                    ? '인터넷 연결이 없습니다. 읽기는 가능하지만 편집 기능은 제한됩니다.'
                     : '인터넷 연결이 복구되었습니다.'}
                 </p>
-                {connectionStatus === 'restored' && pendingSync > 0 && (
-                  <button
-                    onClick={syncPendingData}
-                    className="mt-3 flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-xl font-medium transition-colors"
-                  >
-                    <CloudArrowDownIcon className="w-4 h-4" />
-                    {pendingSync}개 변경사항 동기화
-                  </button>
-                )}
               </div>
 
               <button
@@ -175,43 +118,4 @@ export const OfflineManager: React.FC<OfflineManagerProps> = ({ children }) => {
       )}
     </>
   );
-};
-
-// 오프라인 동작 저장 훅
-export const useOfflineAction = () => {
-  const [isOnline, setIsOnline] = useState(navigator.onLine);
-
-  useEffect(() => {
-    const handleOnline = () => setIsOnline(true);
-    const handleOffline = () => setIsOnline(false);
-
-    window.addEventListener('online', handleOnline);
-    window.addEventListener('offline', handleOffline);
-
-    return () => {
-      window.removeEventListener('online', handleOnline);
-      window.removeEventListener('offline', handleOffline);
-    };
-  }, []);
-
-  const saveOfflineAction = (action: any) => { // eslint-disable-line @typescript-eslint/no-explicit-any
-    if (!isOnline) {
-      try {
-        const pendingActions = localStorage.getItem('pendingSyncActions');
-        const actions = pendingActions ? JSON.parse(pendingActions) : [];
-        actions.push({
-          ...action,
-          timestamp: Date.now()
-        });
-        localStorage.setItem('pendingSyncActions', JSON.stringify(actions));
-        return true;
-      } catch (error) {
-        console.error('Failed to save offline action:', error);
-        return false;
-      }
-    }
-    return false;
-  };
-
-  return { isOnline, saveOfflineAction };
 };

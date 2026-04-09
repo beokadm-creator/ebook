@@ -1963,7 +1963,7 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
           </div>
         ) : null}
 
-        {false && /* eslint-disable-line no-constant-binary-expression, no-constant-condition */ <div className="mb-6 rounded-3xl border border-slate-200 bg-slate-50 p-4">
+        {false && /* eslint-disable-line no-constant-binary-expression */ <div className="mb-6 rounded-3xl border border-slate-200 bg-slate-50 p-4">
           <div className="mb-3 text-sm font-semibold text-slate-800">페이지 번호</div>
           <label className="mb-3 flex items-center justify-between rounded-2xl bg-white px-4 py-3 text-sm">
             <span>표시</span>
@@ -2040,7 +2040,7 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
           </label>
         </div>}
 
-        {false && /* eslint-disable-line no-constant-binary-expression, no-constant-condition */ <div className="mb-6 rounded-3xl border border-slate-200 bg-slate-50 p-4">
+        {false && /* eslint-disable-line no-constant-binary-expression */ <div className="mb-6 rounded-3xl border border-slate-200 bg-slate-50 p-4">
           <div className="mb-3 text-sm font-semibold text-slate-800">출력 가이드</div>
           <label className="mb-3 flex items-center justify-between rounded-2xl bg-white px-4 py-3 text-sm">
             <span>안전 영역</span>
@@ -2934,7 +2934,7 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
 
             {null}
 
-            {false && /* eslint-disable-line no-constant-binary-expression, no-constant-condition */ <div className="rounded-2xl bg-slate-50 p-4 text-sm text-slate-600">
+            {false && /* eslint-disable-line no-constant-binary-expression */ <div className="rounded-2xl bg-slate-50 p-4 text-sm text-slate-600">
               <p className="mb-3 font-semibold text-slate-800">Publication</p>
               <p>ID: {publicationId}</p>
               <p>Preset: {document.layout.pagePreset.key}</p>

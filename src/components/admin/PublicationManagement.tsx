@@ -4,6 +4,8 @@ import { db } from '@/lib/firebase';
 import { Publication, Conference, BilingualValue } from '@/types/content';
 import { showToast } from '@/components/common/Toast';
 import BilingualInput from '@/components/common/BilingualInput';
+import { logger } from '@/lib/logger';
+import { getLocalValue } from '@/utils/bilingualHelpers';
 import {
   PlusIcon,
   PencilIcon,
@@ -46,7 +48,7 @@ const PublicationManagement: React.FC<PublicationManagementProps> = ({ conferenc
       setConferences(confData);
 
       // Fetch Publications
-      let q = query(collection(db, 'publications'), orderBy('createdAt', 'desc'));
+      const q = query(collection(db, 'publications'), orderBy('createdAt', 'desc'));
       const pubSnapshot = await getDocs(q);
       let pubData = pubSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Publication));
       
@@ -57,7 +59,7 @@ const PublicationManagement: React.FC<PublicationManagementProps> = ({ conferenc
       
       setPublications(pubData);
     } catch (error) {
-      console.error('Failed to load data:', error);
+      logger.error('Failed to load admin data', { context: 'admin', error });
       showToast('데이터 로드에 실패했습니다.', 'error');
     } finally {
       setLoading(false);
@@ -75,7 +77,7 @@ const PublicationManagement: React.FC<PublicationManagementProps> = ({ conferenc
       setShowForm(false);
       showToast('간행물이 생성되었습니다.', 'success');
     } catch (error) {
-      console.error('Failed to create:', error);
+      logger.error('Failed to create publication', { context: 'admin', error });
       showToast('간행물 생성에 실패했습니다.', 'error');
     }
   };
@@ -93,7 +95,7 @@ const PublicationManagement: React.FC<PublicationManagementProps> = ({ conferenc
       setEditingPublication(null);
       showToast('간행물이 업데이트되었습니다.', 'success');
     } catch (error) {
-      console.error('Failed to update:', error);
+      logger.error('Failed to update publication', { context: 'admin', error });
       showToast('업데이트에 실패했습니다.', 'error');
     }
   };
@@ -115,7 +117,7 @@ const PublicationManagement: React.FC<PublicationManagementProps> = ({ conferenc
       await loadData();
       showToast('간행물이 삭제되었습니다.', 'success');
     } catch (error) {
-      console.error('Failed to delete:', error);
+      logger.error('Failed to delete publication', { context: 'admin', error });
       showToast('삭제에 실패했습니다.', 'error');
     }
   };
@@ -136,12 +138,6 @@ const PublicationManagement: React.FC<PublicationManagementProps> = ({ conferenc
 
   const handleViewViewer = (pubId: string) => {
     window.location.href = `/viewer/${pubId}`;
-  };
-
-  const getLocalValue = (val: BilingualValue | string | undefined): string => {
-    if (!val) return '';
-    if (typeof val === 'string') return val;
-    return val.ko || val.en || '';
   };
 
   const getTypeIcon = (type: string) => {
@@ -381,7 +377,7 @@ const PublicationForm: React.FC<PublicationFormProps> = ({ publication, conferen
               <label className="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-2 uppercase tracking-wider">콘텐츠 유형</label>
               <select
                 value={formData.type}
-                onChange={(e) => setFormData({ ...formData, type: e.target.value as any })} // eslint-disable-line @typescript-eslint/no-explicit-any
+                onChange={(e) => setFormData({ ...formData, type: e.target.value as Publication['type'] })}
                 className="w-full px-5 py-4 bg-gray-50 dark:bg-gray-900 border-2 border-transparent focus:border-brand-primary focus:bg-white dark:focus:bg-gray-950 rounded-2xl transition-all text-gray-900 dark:text-gray-100 font-medium outline-none"
               >
                 <option value="abstract">초록집</option>

@@ -1,6 +1,6 @@
 import { TextMarkSet, TextRun } from '@/types/publishing';
 
-const STRUCTURED_LABEL_PATTERN = /^(목적|방법|대상 및 방법|결과|결론|서론|증례보고|증례 보고|증례|고찰|Introduction|Background|Purpose|Methods?|Materials and Methods|Results?|Conclusion|Conclusions|Case|Case Report|Discussion)(\s*[:.\-]\s*|\s+|$)/i;
+const STRUCTURED_LABEL_PATTERN = /^(목적|방법|대상 및 방법|결과|결론|서론|증례보고|증례 보고|증례|고찰|Introduction|Background|Purpose|Methods?|Materials and Methods|Results?|Conclusion|Conclusions|Case|Case Report|Discussion)(\s*[:.-]\s*|\s+|$)/i;
 
 const renderStructuredText = (text: string) =>
   text.split('\n').map((line, lineIndex, lines) => {
