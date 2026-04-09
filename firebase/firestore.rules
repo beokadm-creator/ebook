@@ -24,15 +24,18 @@ service cloud.firestore {
       allow write: if isAdmin();
 
       match /editor/{documentId} {
-        allow read, write: if isAdmin();
+        allow read: if true;
+        allow write: if isAdmin();
       }
 
       match /editorPages/{pageId} {
-        allow read, write: if isAdmin();
+        allow read: if true;
+        allow write: if isAdmin();
       }
 
       match /editorAssets/{assetId} {
-        allow read, write: if isAdmin();
+        allow read: if true;
+        allow write: if isAdmin();
       }
 
       match /articles/{articleId} {
@@ -52,7 +55,8 @@ service cloud.firestore {
     }
 
     match /publishingGlobals/{docId} {
-      allow read, write: if isAdmin();
+      allow read: if true;
+      allow write: if isAdmin();
     }
 
     // Users - own document can be created on first login, admin can write all
