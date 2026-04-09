@@ -216,7 +216,7 @@ export function useErrorHandler() {
 }
 
 // 에러 로깅 유틸리티
-export function logError(error: Error, context?: Record<string, any>) {
+export function logError(error: Error, context?: Record<string, any>) { // eslint-disable-line @typescript-eslint/no-explicit-any
   const errorData = {
     message: error.message,
     stack: error.stack,

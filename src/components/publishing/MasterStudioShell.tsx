@@ -8,7 +8,7 @@ import {
   Squares2X2Icon,
   TrashIcon,
 } from '@heroicons/react/24/outline';
-import { uploadPublicationImage } from '@/lib/publishing/assets';
+import { getRenderableImageUrl, uploadMasterImage } from '@/lib/publishing/assets';
 import { formatMm, pxToMm } from '@/lib/publishing/a4';
 import { TEMPLATE_PRESET_DESCRIPTIONS, TEMPLATE_PRESET_LABELS, TemplatePresetKey } from '@/lib/publishing/templatePresets';
 import { showToast } from '@/components/common/Toast';
@@ -19,12 +19,38 @@ import { logError } from '@/utils/errorHandler';
 
 interface MasterStudioShellProps {
   publicationId: string;
+  onSaveMaster: () => void | Promise<void>;
 }
 
+const SLOT_KEY_GUIDES: Record<string, { aiField: string; summary: string; example: string }> = {
+  track: { aiField: 'track', summary: '세션/트랙명', example: 'Oral Cancer & Pathology' },
+  title_ko: { aiField: 'titleKo', summary: '국문 제목', example: '국문 발표 제목' },
+  authors_ko: { aiField: 'authorsKo', summary: '국문 저자', example: '홍길동, 김영희' },
+  affiliation_ko: { aiField: 'affiliationKo', summary: '국문 소속', example: 'OO대학교 구강악안면외과' },
+  body_ko: { aiField: 'koContent', summary: '국문 본문', example: '서론 / 증례 / 고찰 또는 본문 전체' },
+  title_en: { aiField: 'title', summary: '영문 제목', example: 'English presentation title' },
+  authors_en: { aiField: 'authors', summary: '영문 저자', example: 'John Kim, Jane Lee' },
+  affiliation_en: { aiField: 'institution', summary: '영문 소속', example: 'Department of Oral and Maxillofacial Surgery' },
+  body_en: { aiField: 'enContent', summary: '영문 본문', example: 'Introduction / Case / Discussion or full body' },
+  captions: { aiField: 'captions[]', summary: '캡션 목록', example: 'Figure 1. ...' },
+};
+
+const getSlotGuide = (slotKey?: string) => {
+  if (!slotKey) {
+    return null;
+  }
+
+  return SLOT_KEY_GUIDES[slotKey] ?? null;
+};
+
+const SPEAKER_TITLE_SLOT_KEYS = ['title_ko', 'title_en'];
+const SPEAKER_BYLINE_SLOT_KEYS = ['authors_ko', 'authors_en', 'affiliation_ko', 'affiliation_en'];
+const PAGE_NUMBER_DECORATION_WIDTH = 50;
 const getDecorationTitle = (decoration: DecorationElement) => {
   if (decoration.textBinding === 'page.number') return '페이지 번호';
   if (decoration.textBinding === 'document.title') return '문서 제목';
   if (decoration.textBinding === 'section.number') return '섹션 번호';
+  if (decoration.textBinding === 'presentation.code') return '발표 번호';
   if (decoration.type === 'image') return '이미지';
   if (decoration.type === 'shape') return '라인';
   return '텍스트';
@@ -45,18 +71,23 @@ const MiniMasterCard: React.FC<{
       isActive ? 'border-slate-900 bg-slate-900 text-white' : 'border-slate-200 bg-white text-slate-900 hover:border-slate-400'
     }`}
   >
-    <div className="flex items-center justify-between gap-3">
+      <div className="flex items-center justify-between gap-3">
       <div>
         <p className="text-sm font-semibold">{master.name}</p>
         <p className={`mt-1 text-xs ${isActive ? 'text-slate-300' : 'text-slate-500'}`}>
           {master.contentZones.length} 영역 · {master.decorations.length} 요소
         </p>
       </div>
-      {isDefault ? (
+      <div className="flex items-center gap-2">
         <span className={`rounded-full px-2.5 py-1 text-[10px] font-semibold ${isActive ? 'bg-white/15 text-white' : 'bg-slate-100 text-slate-700'}`}>
-          기본
+          {master.mode === 'speaker-thread' ? '발표자형' : '페이지형'}
         </span>
-      ) : null}
+        {isDefault ? (
+          <span className={`rounded-full px-2.5 py-1 text-[10px] font-semibold ${isActive ? 'bg-white/15 text-white' : 'bg-slate-100 text-slate-700'}`}>
+            기본
+          </span>
+        ) : null}
+      </div>
     </div>
 
     <div className={`mt-4 rounded-2xl border p-3 ${isActive ? 'border-white/10 bg-white/10' : 'border-slate-200 bg-slate-50'}`}>
@@ -117,14 +148,19 @@ const FrameFields: React.FC<{
 const ZoneEditor: React.FC<{
   zone: ContentZoneTemplate;
   pagePreset: PagePreset;
-  masterLocked: boolean;
+  slotOptions?: Array<{ value: string; label: string }>;
   canDelete: boolean;
   onToggleLock: () => void;
   onUpdate: (updates: Partial<{ x: number; y: number; width: number; height: number }>) => void;
   onStyleUpdate: (updates: Partial<ContentZoneTemplate['style']>) => void;
-  onMetaUpdate: (updates: Partial<{ name: string; slotKey?: string; flowGroupId?: string; flowOrder?: number; allowThreadContinuation?: boolean }>) => void;
+  onMetaUpdate: (updates: Partial<{ name: string; slotKey?: string; flowGroupId?: string; flowOrder?: number }>) => void;
   onDelete: () => void;
-}> = ({ zone, pagePreset, masterLocked, canDelete, onToggleLock, onUpdate, onStyleUpdate, onMetaUpdate, onDelete }) => (
+}> = ({ zone, pagePreset, slotOptions = [], canDelete, onToggleLock, onUpdate, onStyleUpdate, onMetaUpdate, onDelete }) => (
+  (() => {
+    const slotGuide = getSlotGuide(zone.slotKey);
+    const hasSlotOptions = slotOptions.length > 0;
+
+    return (
   <div className="rounded-2xl bg-white p-4">
     <div className="mb-3 flex items-start justify-between gap-3">
       <div>
@@ -132,12 +168,21 @@ const ZoneEditor: React.FC<{
         <p className="mt-1 text-xs text-slate-500">
           {zone.flowOrder ? `Flow ${zone.flowOrder}` : '영역'} · {zone.kind === 'text-flow' ? 'text' : zone.kind === 'media-freeform' ? 'image' : zone.kind}
         </p>
+        {slotGuide ? (
+          <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px]">
+            <span className="rounded-full bg-emerald-50 px-2.5 py-1 font-semibold text-emerald-700">
+              GLM key: {slotGuide.aiField}
+            </span>
+            <span className="rounded-full bg-slate-100 px-2.5 py-1 text-slate-600">
+              {slotGuide.summary}
+            </span>
+          </div>
+        ) : null}
       </div>
       <div className="flex items-center gap-2">
         <button
           type="button"
           onClick={onToggleLock}
-          disabled={masterLocked}
           className="rounded-full border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 disabled:opacity-50"
         >
           {zone.locked ? '잠금 해제' : '잠금'}
@@ -158,22 +203,42 @@ const ZoneEditor: React.FC<{
         <input
           type="text"
           value={zone.name}
-          disabled={masterLocked || zone.locked}
+          disabled={zone.locked}
           onChange={(event) => onMetaUpdate({ name: event.target.value })}
           className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
         />
       </label>
       <label className="block col-span-2">
         <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">slot key</span>
-        <input
-          type="text"
-          value={zone.slotKey ?? ''}
-          disabled={masterLocked || zone.locked}
-          onChange={(event) => onMetaUpdate({ slotKey: event.target.value })}
-          className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-          placeholder="body / title / authors / affiliation"
-        />
+        {hasSlotOptions ? (
+          <select
+            value={zone.slotKey ?? ''}
+            disabled={zone.locked}
+            onChange={(event) => onMetaUpdate({ slotKey: event.target.value })}
+            className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+          >
+            {slotOptions.map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </select>
+        ) : (
+          <input
+            type="text"
+            value={zone.slotKey ?? ''}
+            disabled={zone.locked}
+            onChange={(event) => onMetaUpdate({ slotKey: event.target.value })}
+            className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+            placeholder="예: title_ko / body_ko / title_en / body_en"
+          />
+        )}
       </label>
+      {slotGuide ? (
+        <div className="col-span-2 rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-3 text-xs text-emerald-900">
+          <p className="font-semibold">AI 매핑 안내</p>
+          <p className="mt-1">이 영역은 GLM 결과의 <span className="font-semibold">{slotGuide.aiField}</span> 값을 받아 배치합니다.</p>
+          <p className="mt-1 text-emerald-800/80">예시 내용: {slotGuide.example}</p>
+        </div>
+      ) : null}
       {zone.kind === 'text-flow' ? (
         <>
           <label className="block">
@@ -181,7 +246,7 @@ const ZoneEditor: React.FC<{
             <input
               type="text"
               value={zone.flowGroupId ?? ''}
-              disabled={masterLocked || zone.locked}
+              disabled={zone.locked}
               onChange={(event) => onMetaUpdate({ flowGroupId: event.target.value })}
               className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
             />
@@ -192,25 +257,15 @@ const ZoneEditor: React.FC<{
               type="number"
               min={1}
               value={zone.flowOrder ?? ''}
-              disabled={masterLocked || zone.locked}
+              disabled={zone.locked}
               onChange={(event) => onMetaUpdate({ flowOrder: Number(event.target.value) || undefined })}
               className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-            />
-          </label>
-          <label className="col-span-2 flex items-center justify-between rounded-xl border border-slate-200 px-3 py-2 text-sm">
-            <span>다음 영역으로 이어짐</span>
-            <input
-              type="checkbox"
-              checked={zone.allowThreadContinuation !== false}
-              disabled={masterLocked || zone.locked}
-              onChange={(event) => onMetaUpdate({ allowThreadContinuation: event.target.checked })}
-              className="h-4 w-4"
             />
           </label>
         </>
       ) : null}
     </div>
-    <FrameFields frame={zone.frame} disabled={masterLocked || zone.locked} onChange={onUpdate} />
+    <FrameFields frame={zone.frame} disabled={zone.locked} onChange={onUpdate} />
     {zone.kind === 'text-flow' ? (
       <div className="mt-3 grid grid-cols-2 gap-2">
         <label className="block col-span-2">
@@ -218,8 +273,8 @@ const ZoneEditor: React.FC<{
           <input
             type="text"
             value={zone.style.fontFamily}
-            disabled={masterLocked || zone.locked}
-            onChange={(event) => onStyleUpdate({ fontFamily: event.target.value || 'Noto Serif KR' })}
+            disabled={zone.locked}
+            onChange={(event) => onStyleUpdate({ fontFamily: event.target.value || 'NanumSquare' })}
             className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
           />
         </label>
@@ -228,7 +283,7 @@ const ZoneEditor: React.FC<{
           <input
             type="number"
             value={zone.style.fontSize}
-            disabled={masterLocked || zone.locked}
+            disabled={zone.locked}
             onChange={(event) => onStyleUpdate({ fontSize: Number(event.target.value) || 12 })}
             className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
           />
@@ -238,7 +293,7 @@ const ZoneEditor: React.FC<{
           <input
             type="number"
             value={zone.style.fontWeight}
-            disabled={masterLocked || zone.locked}
+            disabled={zone.locked}
             onChange={(event) => onStyleUpdate({ fontWeight: Number(event.target.value) || 400 })}
             className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
           />
@@ -249,7 +304,7 @@ const ZoneEditor: React.FC<{
             type="number"
             step="0.05"
             value={zone.style.lineHeight}
-            disabled={masterLocked || zone.locked}
+            disabled={zone.locked}
             onChange={(event) => onStyleUpdate({ lineHeight: Number(event.target.value) || 1.6 })}
             className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
           />
@@ -260,7 +315,7 @@ const ZoneEditor: React.FC<{
             type="number"
             step="0.1"
             value={zone.style.letterSpacing}
-            disabled={masterLocked || zone.locked}
+            disabled={zone.locked}
             onChange={(event) => onStyleUpdate({ letterSpacing: Number(event.target.value) || 0 })}
             className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
           />
@@ -269,7 +324,7 @@ const ZoneEditor: React.FC<{
           <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">align</span>
           <select
             value={zone.style.textAlign}
-            disabled={masterLocked || zone.locked}
+            disabled={zone.locked}
             onChange={(event) => onStyleUpdate({ textAlign: event.target.value as 'left' | 'center' | 'right' | 'justify' })}
             className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
           >
@@ -284,7 +339,7 @@ const ZoneEditor: React.FC<{
           <input
             type="color"
             value={zone.style.color}
-            disabled={masterLocked || zone.locked}
+            disabled={zone.locked}
             onChange={(event) => onStyleUpdate({ color: event.target.value })}
             className="h-10 w-full rounded-xl border border-slate-200 p-1"
           />
@@ -302,9 +357,11 @@ const ZoneEditor: React.FC<{
       <p>{formatMm(pxToMm(zone.frame.height, pagePreset))}</p>
     </div>
   </div>
+    );
+  })()
 );
 
-const MasterStudioShell: React.FC<MasterStudioShellProps> = ({ publicationId }) => {
+const MasterStudioShell: React.FC<MasterStudioShellProps> = ({ publicationId, onSaveMaster }) => {
   const document = usePublishingStore((state) => state.document);
   const autosave = usePublishingStore((state) => state.autosave);
   const createMaster = usePublishingStore((state) => state.createMaster);
@@ -312,6 +369,8 @@ const MasterStudioShell: React.FC<MasterStudioShellProps> = ({ publicationId }) 
   const deleteMaster = usePublishingStore((state) => state.deleteMaster);
   const setDefaultMaster = usePublishingStore((state) => state.setDefaultMaster);
   const renameMaster = usePublishingStore((state) => state.renameMaster);
+  const resetSpeakerThreadMaster = usePublishingStore((state) => state.resetSpeakerThreadMaster);
+  const setMasterPresentationTracksUsage = usePublishingStore((state) => state.setMasterPresentationTracksUsage);
   const updateDocumentMeta = usePublishingStore((state) => state.updateDocumentMeta);
   const updatePageNumbering = usePublishingStore((state) => state.updatePageNumbering);
   const updatePrintGuides = usePublishingStore((state) => state.updatePrintGuides);
@@ -348,6 +407,10 @@ const MasterStudioShell: React.FC<MasterStudioShellProps> = ({ publicationId }) 
 
   const pagePreset = document.layout.pagePreset;
   const selectedMaster = document.masters.items.find((item) => item.id === activeMasterId) ?? document.masters.items[0];
+  const slotOptions = selectedMaster?.slotSchema?.map((slot) => ({
+    value: slot.slotKey,
+    label: `${slot.label} (${slot.slotKey})`,
+  })) ?? [];
   const templateDecorations = selectedMaster?.decorations.filter((item) => item.scope !== 'global-fixed') ?? [];
   const globalFixedDecorations = selectedMaster?.decorations.filter((item) => item.scope === 'global-fixed') ?? [];
   const previewPage = {
@@ -379,7 +442,7 @@ const MasterStudioShell: React.FC<MasterStudioShellProps> = ({ publicationId }) 
     try {
       setUploadingMasterImage(true);
       setMasterUploadProgress(0);
-      const uploaded = await uploadPublicationImage(publicationId, file, setMasterUploadProgress);
+      const uploaded = await uploadMasterImage(file, setMasterUploadProgress);
       addMasterImageDecoration(selectedMaster.id, uploaded);
       showToast('마스터 이미지를 추가했습니다.', 'success');
     } catch (error) {
@@ -389,7 +452,7 @@ const MasterStudioShell: React.FC<MasterStudioShellProps> = ({ publicationId }) 
       setUploadingMasterImage(false);
       event.target.value = '';
     }
-  }, [addMasterImageDecoration, publicationId, selectedMaster]);
+  }, [addMasterImageDecoration, selectedMaster]);
 
   const handleDeleteMaster = useCallback(() => {
     if (!selectedMaster || document.masters.items.length <= 1) {
@@ -403,6 +466,47 @@ const MasterStudioShell: React.FC<MasterStudioShellProps> = ({ publicationId }) 
     }
   }, [deleteMaster, document.masters.items, selectedMaster]);
 
+  const applyPageNumberSettings = useCallback((settings: {
+    alignment?: 'left' | 'center' | 'right';
+    fontSize?: number;
+  }) => {
+    document.masters.items.forEach((master) => {
+      master.decorations
+        .filter((decoration) => decoration.textBinding === 'page.number')
+        .forEach((decoration) => {
+          const alignment = settings.alignment ?? (decoration.style?.textAlign as 'left' | 'center' | 'right' | undefined) ?? 'right';
+          const nextX =
+            alignment === 'left'
+              ? pagePreset.safeMarginPx.left
+              : alignment === 'center'
+                ? (pagePreset.widthPx - PAGE_NUMBER_DECORATION_WIDTH) / 2
+                : pagePreset.widthPx - pagePreset.safeMarginPx.right - PAGE_NUMBER_DECORATION_WIDTH;
+
+          updateGlobalMasterDecoration(master.id, decoration.id, {
+            x: nextX,
+            width: PAGE_NUMBER_DECORATION_WIDTH,
+            style: {
+              ...(settings.fontSize ? { fontSize: settings.fontSize } : {}),
+              textAlign: alignment,
+            },
+          });
+        });
+    });
+  }, [document.masters.items, pagePreset.safeMarginPx.left, pagePreset.safeMarginPx.right, pagePreset.widthPx, updateGlobalMasterDecoration]);
+
+  const applySpeakerAlignPreset = useCallback((slotKeys: string[], textAlign: 'left' | 'center' | 'right') => {
+    if (!selectedMaster || selectedMaster.mode !== 'speaker-thread') {
+      return;
+    }
+
+    selectedMaster.contentZones
+      .filter((zone) => zone.kind === 'text-flow' && zone.slotKey && slotKeys.includes(zone.slotKey))
+      .forEach((zone) => {
+        updateMasterZoneStyle(selectedMaster.id, zone.id, { textAlign });
+      });
+    showToast('정렬 프리셋을 적용했습니다.', 'success');
+  }, [selectedMaster, updateMasterZoneStyle]);
+
   if (!selectedMaster) {
     return null;
   }
@@ -412,9 +516,9 @@ const MasterStudioShell: React.FC<MasterStudioShellProps> = ({ publicationId }) 
     : autosave.isSaving
       ? '저장 중'
       : autosave.dirty
-        ? '수정됨'
+        ? '저장 필요'
         : autosave.lastSavedAt
-          ? '저장됨'
+          ? `저장 완료 · ${new Date(autosave.lastSavedAt).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })}`
           : '편집 중';
 
   return (
@@ -427,6 +531,27 @@ const MasterStudioShell: React.FC<MasterStudioShellProps> = ({ publicationId }) 
             <p className="mt-1 text-sm text-slate-500">{saveLabel}</p>
           </div>
           <div className="flex items-center gap-2">
+            <div
+              className={`rounded-full px-3 py-2 text-xs font-semibold ${
+                autosave.lastError
+                  ? 'bg-rose-50 text-rose-700'
+                  : autosave.isSaving
+                    ? 'bg-amber-50 text-amber-700'
+                    : autosave.dirty
+                      ? 'bg-sky-50 text-sky-700'
+                      : 'bg-emerald-50 text-emerald-700'
+              }`}
+            >
+              {autosave.lastError ? '저장 실패' : autosave.isSaving ? '저장 중' : autosave.dirty ? '저장 필요' : '저장 완료'}
+            </div>
+            <button
+              type="button"
+              onClick={() => void onSaveMaster()}
+              disabled={autosave.isSaving || !autosave.dirty}
+              className="inline-flex items-center gap-2 rounded-full bg-emerald-600 px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-emerald-300"
+            >
+              마스터 저장
+            </button>
             <button
               type="button"
               onClick={() => {
@@ -461,11 +586,6 @@ const MasterStudioShell: React.FC<MasterStudioShellProps> = ({ publicationId }) 
                 {document.masters.items.length}개
               </span>
             </div>
-            <label className="mb-4 flex cursor-pointer items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-700">
-              <PhotoIcon className="h-4 w-4" />
-              카드 이미지 추가
-              <input type="file" accept="image/*" onChange={handleUploadMasterFile} className="hidden" />
-            </label>
             <div className="space-y-3">
               {document.masters.items.map((master) => (
                 <MiniMasterCard
@@ -499,8 +619,8 @@ const MasterStudioShell: React.FC<MasterStudioShellProps> = ({ publicationId }) 
           </div>
         </section>
 
-        <aside className="space-y-4 [&_input]:bg-white [&_input]:text-slate-900 [&_select]:bg-white [&_select]:text-slate-900 [&_textarea]:bg-white [&_textarea]:text-slate-900">
-          <div className="rounded-[28px] border border-slate-200 bg-white p-5">
+        <aside className="flex flex-col gap-4 [&_input]:bg-white [&_input]:text-slate-900 [&_select]:bg-white [&_select]:text-slate-900 [&_textarea]:bg-white [&_textarea]:text-slate-900">
+          <div className="order-2 rounded-[28px] border border-slate-200 bg-white p-5">
             <p className="mb-3 text-sm font-semibold text-slate-900">문서 설정</p>
             <div className="space-y-3">
               <input
@@ -529,22 +649,59 @@ const MasterStudioShell: React.FC<MasterStudioShellProps> = ({ publicationId }) 
                 </label>
               </div>
               <div className="grid grid-cols-2 gap-2">
-                <input
-                  type="number"
-                  min={1}
-                  value={document.layout.pageNumbering.startAt}
-                  onChange={(event) => updatePageNumbering({ startAt: Math.max(1, Number(event.target.value) || 1) })}
-                  className="rounded-2xl border border-slate-200 px-4 py-3 text-sm"
-                />
-                <select
-                  value={document.layout.pageNumbering.alignmentPreset}
-                  onChange={(event) => updatePageNumbering({ alignmentPreset: event.target.value as 'left' | 'center' | 'right' })}
-                  className="rounded-2xl border border-slate-200 px-4 py-3 text-sm"
+                <label className="block">
+                  <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">시작 번호</span>
+                  <input
+                    type="number"
+                    min={1}
+                    value={document.layout.pageNumbering.startAt}
+                    onChange={(event) => updatePageNumbering({ startAt: Math.max(1, Number(event.target.value) || 1) })}
+                    className="w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm"
+                  />
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">번호 크기</span>
+                  <input
+                    type="number"
+                    min={6}
+                    max={32}
+                    value={globalFixedDecorations.find((item) => item.textBinding === 'page.number')?.style?.fontSize ?? 10}
+                    onChange={(event) => applyPageNumberSettings({ fontSize: Math.max(6, Number(event.target.value) || 10) })}
+                    className="w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm"
+                  />
+                </label>
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    updatePageNumbering({ alignmentPreset: 'left', mirrorOnEvenPages: false });
+                    applyPageNumberSettings({ alignment: 'left' });
+                  }}
+                  className="rounded-2xl border border-slate-200 px-3 py-3 text-xs font-semibold text-slate-700"
                 >
-                  <option value="left">왼쪽</option>
-                  <option value="center">가운데</option>
-                  <option value="right">오른쪽</option>
-                </select>
+                  번호 왼쪽
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    updatePageNumbering({ alignmentPreset: 'center', mirrorOnEvenPages: false });
+                    applyPageNumberSettings({ alignment: 'center' });
+                  }}
+                  className="rounded-2xl border border-slate-200 px-3 py-3 text-xs font-semibold text-slate-700"
+                >
+                  번호 가운데
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    updatePageNumbering({ alignmentPreset: 'right', mirrorOnEvenPages: false });
+                    applyPageNumberSettings({ alignment: 'right' });
+                  }}
+                  className="rounded-2xl border border-slate-200 px-3 py-3 text-xs font-semibold text-slate-700"
+                >
+                  번호 오른쪽
+                </button>
               </div>
               <label className="flex items-center justify-between rounded-2xl border border-slate-200 px-4 py-3 text-sm">
                 <span>안전영역 표시</span>
@@ -573,6 +730,15 @@ const MasterStudioShell: React.FC<MasterStudioShellProps> = ({ publicationId }) 
               </button>
             </div>
             <div className="space-y-3">
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+                <p className="font-semibold text-slate-800">마스터 모드</p>
+                <p className="mt-1">{selectedMaster.mode === 'speaker-thread' ? '발표자 스레드형' : '페이지 자유형'}</p>
+                <p className="mt-1 text-xs text-slate-500">
+                  {selectedMaster.mode === 'speaker-thread'
+                    ? 'Word 원고를 발표자 단위로 받아 슬롯에 자동 배치합니다.'
+                    : '페이지를 직접 구성하고 자유 배치합니다.'}
+                </p>
+              </div>
               <input
                 value={selectedMaster.name}
                 onChange={(event) => renameMaster(selectedMaster.id, event.target.value)}
@@ -615,18 +781,99 @@ const MasterStudioShell: React.FC<MasterStudioShellProps> = ({ publicationId }) 
             </div>
           </div>
 
-          <div className="rounded-[28px] border border-slate-200 bg-white p-5">
+          {selectedMaster.mode === 'speaker-thread' ? (
+            <div className="order-3 rounded-[28px] border border-slate-200 bg-white p-5">
+              <div className="mb-4">
+                <p className="text-sm font-semibold text-slate-900">빠른 프리셋</p>
+                <p className="mt-1 text-xs text-slate-500">발표자형 제목/저자/본문 정렬을 빠르게 적용합니다.</p>
+              </div>
+              <div className="space-y-4">
+                <div>
+                  <p className="mb-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">제목 정렬</p>
+                  <div className="grid grid-cols-3 gap-2">
+                    <button type="button" onClick={() => applySpeakerAlignPreset(SPEAKER_TITLE_SLOT_KEYS, 'left')} className="rounded-2xl border border-slate-200 px-3 py-3 text-xs font-semibold text-slate-700">왼쪽</button>
+                    <button type="button" onClick={() => applySpeakerAlignPreset(SPEAKER_TITLE_SLOT_KEYS, 'center')} className="rounded-2xl border border-slate-200 px-3 py-3 text-xs font-semibold text-slate-700">가운데</button>
+                    <button type="button" onClick={() => applySpeakerAlignPreset(SPEAKER_TITLE_SLOT_KEYS, 'right')} className="rounded-2xl border border-slate-200 px-3 py-3 text-xs font-semibold text-slate-700">오른쪽</button>
+                  </div>
+                </div>
+                <div>
+                  <p className="mb-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">저자/소속 정렬</p>
+                  <div className="grid grid-cols-3 gap-2">
+                    <button type="button" onClick={() => applySpeakerAlignPreset(SPEAKER_BYLINE_SLOT_KEYS, 'left')} className="rounded-2xl border border-slate-200 px-3 py-3 text-xs font-semibold text-slate-700">왼쪽</button>
+                    <button type="button" onClick={() => applySpeakerAlignPreset(SPEAKER_BYLINE_SLOT_KEYS, 'center')} className="rounded-2xl border border-slate-200 px-3 py-3 text-xs font-semibold text-slate-700">가운데</button>
+                    <button type="button" onClick={() => applySpeakerAlignPreset(SPEAKER_BYLINE_SLOT_KEYS, 'right')} className="rounded-2xl border border-slate-200 px-3 py-3 text-xs font-semibold text-slate-700">오른쪽</button>
+                  </div>
+                </div>
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-600">
+                  본문은 항상 양쪽 정렬로 유지되고 마지막 줄은 왼쪽 정렬로 출력됩니다.
+                </div>
+                <label className="flex items-center justify-between rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700">
+                  <span>트랙 목록 사용</span>
+                  <input
+                    type="checkbox"
+                    checked={selectedMaster.usesPresentationTracks ?? false}
+                    onChange={(event) => setMasterPresentationTracksUsage(selectedMaster.id, event.target.checked)}
+                    className="h-4 w-4"
+                  />
+                </label>
+              </div>
+            </div>
+          ) : null}
+
+          <div className="order-4 rounded-[28px] border border-slate-200 bg-white p-5">
             <div className="mb-4 flex items-center justify-between">
               <p className="text-sm font-semibold text-slate-900">영역 설정</p>
               <span className="text-xs text-slate-500">{selectedMaster.contentZones.length}개</span>
             </div>
+            {selectedMaster.slotSchema?.length ? (
+              <div className="mb-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <p className="text-sm font-semibold text-slate-800">권장 슬롯 스키마</p>
+                <div className="mt-3 space-y-2">
+                  {selectedMaster.slotSchema.map((slot) => (
+                    <div key={slot.slotKey} className="flex items-center justify-between gap-3 rounded-xl bg-white px-3 py-2 text-xs">
+                      <div>
+                        <p className="font-semibold text-slate-800">{slot.label}</p>
+                        <p className="text-slate-500">{slot.slotKey}</p>
+                        {getSlotGuide(slot.slotKey) ? (
+                          <div className="mt-1 flex flex-wrap gap-2">
+                            <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700">
+                              GLM key: {getSlotGuide(slot.slotKey)?.aiField}
+                            </span>
+                            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] text-slate-600">
+                              {getSlotGuide(slot.slotKey)?.summary}
+                            </span>
+                          </div>
+                        ) : null}
+                      </div>
+                      <div className="flex flex-col items-end gap-1">
+                        <span className="rounded-full bg-slate-100 px-3 py-1 text-slate-600">
+                          {slot.role}
+                        </span>
+                        {slot.language ? (
+                          <span className="rounded-full bg-sky-50 px-3 py-1 text-sky-700">
+                            {slot.language}
+                          </span>
+                        ) : null}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
             <div className="mb-4 grid grid-cols-2 gap-2">
               <button
                 type="button"
-                onClick={() => addMasterTextZone(selectedMaster.id)}
+                onClick={() => {
+                  if (selectedMaster.mode === 'speaker-thread') {
+                    resetSpeakerThreadMaster(selectedMaster.id);
+                    showToast('발표자 슬롯 기본형을 다시 적용했습니다.', 'success');
+                    return;
+                  }
+                  addMasterTextZone(selectedMaster.id);
+                }}
                 className="rounded-2xl border border-slate-200 px-3 py-3 text-xs font-semibold text-slate-700"
               >
-                텍스트 영역 추가
+                {selectedMaster.mode === 'speaker-thread' ? '기본 슬롯 적용' : '텍스트 영역 추가'}
               </button>
               <button
                 type="button"
@@ -636,13 +883,18 @@ const MasterStudioShell: React.FC<MasterStudioShellProps> = ({ publicationId }) 
                 이미지 영역 추가
               </button>
             </div>
+            {selectedMaster.mode === 'speaker-thread' ? (
+              <p className="mb-4 text-xs text-slate-500">
+                발표자형 마스터는 표준 슬롯만 사용합니다. 레거시 텍스트 박스는 정리되며 새 자유 텍스트 영역은 추가하지 않습니다.
+              </p>
+            ) : null}
             <div className="space-y-3">
               {selectedMaster.contentZones.map((zone) => (
                 <ZoneEditor
                   key={zone.id}
                   zone={zone}
                   pagePreset={pagePreset}
-                  masterLocked={selectedMaster.locked}
+                  slotOptions={selectedMaster.mode === 'speaker-thread' && zone.kind === 'text-flow' ? slotOptions : []}
                   canDelete={
                     selectedMaster.contentZones.length > 1
                     && !document.pages.some((page) =>
@@ -660,7 +912,7 @@ const MasterStudioShell: React.FC<MasterStudioShellProps> = ({ publicationId }) 
             </div>
           </div>
 
-          <div className="rounded-[28px] border border-slate-200 bg-white p-5">
+          <div className="order-1 rounded-[28px] border border-slate-200 bg-white p-5">
             <div className="mb-4 flex items-center justify-between">
               <p className="text-sm font-semibold text-slate-900">마스터 요소</p>
               <div className="flex items-center gap-2">
@@ -716,13 +968,15 @@ const MasterStudioShell: React.FC<MasterStudioShellProps> = ({ publicationId }) 
                       ) : null}
                     </div>
                   </div>
-                  {decoration.type === 'text' && !decoration.textBinding ? (
+                  {decoration.type === 'text' ? (
                     <>
-                      <input
-                        value={decoration.text || ''}
-                        onChange={(event) => updateMasterDecoration(selectedMaster.id, decoration.id, { text: event.target.value })}
-                        className="mb-3 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                      />
+                      {!decoration.textBinding ? (
+                        <input
+                          value={decoration.text || ''}
+                          onChange={(event) => updateMasterDecoration(selectedMaster.id, decoration.id, { text: event.target.value })}
+                          className="mb-3 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                        />
+                      ) : null}
                       <div className="mb-3 grid grid-cols-2 gap-2">
                         <label className="block">
                           <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">size</span>
@@ -786,9 +1040,55 @@ const MasterStudioShell: React.FC<MasterStudioShellProps> = ({ publicationId }) 
                       </div>
                     </>
                   ) : null}
+                  {decoration.type === 'image' ? (
+                    <div className="mb-3 overflow-hidden rounded-xl border border-slate-200 bg-slate-50">
+                      {decoration.src ? (
+                        <img
+                          src={getRenderableImageUrl(decoration.src)}
+                          alt=""
+                          className="h-28 w-full object-contain"
+                        />
+                      ) : (
+                        <div className="flex h-28 items-center justify-center text-xs text-slate-500">이미지 없음</div>
+                      )}
+                    </div>
+                  ) : null}
+                  {decoration.type === 'shape' ? (
+                    <div className="mb-3 grid grid-cols-2 gap-2">
+                      <label className="block">
+                        <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">shape</span>
+                        <select
+                          value={decoration.shape ?? 'line'}
+                          onChange={(event) =>
+                            updateMasterDecoration(selectedMaster.id, decoration.id, {
+                              shape: event.target.value as 'rect' | 'line' | 'ellipse',
+                            })
+                          }
+                          className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                        >
+                          <option value="line">line</option>
+                          <option value="rect">rect</option>
+                          <option value="ellipse">ellipse</option>
+                        </select>
+                      </label>
+                      <label className="block">
+                        <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">fill</span>
+                        <input
+                          type="color"
+                          value={decoration.fill ?? '#cbd5e1'}
+                          onChange={(event) =>
+                            updateMasterDecoration(selectedMaster.id, decoration.id, {
+                              fill: event.target.value,
+                            })
+                          }
+                          className="h-10 w-full rounded-xl border border-slate-200 p-1"
+                        />
+                      </label>
+                    </div>
+                  ) : null}
                   <FrameFields
                     frame={decoration}
-                    disabled={selectedMaster.locked || decoration.locked}
+                    disabled={decoration.locked}
                     onChange={(updates) => updateMasterDecoration(selectedMaster.id, decoration.id, updates)}
                   />
                 </div>
@@ -796,7 +1096,7 @@ const MasterStudioShell: React.FC<MasterStudioShellProps> = ({ publicationId }) 
             </div>
           </div>
 
-          <div className="rounded-[28px] border border-slate-200 bg-white p-5">
+          <div className="order-5 rounded-[28px] border border-slate-200 bg-white p-5">
             <div className="mb-4 flex items-center justify-between">
               <p className="text-sm font-semibold text-slate-900">전역 고정 요소</p>
               <span className="text-xs text-slate-500">{globalFixedDecorations.length}개</span>
@@ -826,6 +1126,23 @@ const MasterStudioShell: React.FC<MasterStudioShellProps> = ({ publicationId }) 
                           }
                           className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
                         />
+                      </label>
+                      <label className="block">
+                        <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">align</span>
+                        <select
+                          value={decoration.style?.textAlign ?? 'right'}
+                          onChange={(event) =>
+                            updateGlobalMasterDecoration(selectedMaster.id, decoration.id, {
+                              style: { textAlign: event.target.value as 'left' | 'center' | 'right' | 'justify' },
+                            })
+                          }
+                          className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                        >
+                          <option value="left">왼쪽</option>
+                          <option value="center">가운데</option>
+                          <option value="right">오른쪽</option>
+                          <option value="justify">양쪽</option>
+                        </select>
                       </label>
                       <label className="block">
                         <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">color</span>

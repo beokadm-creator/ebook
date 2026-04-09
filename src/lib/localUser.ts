@@ -36,7 +36,7 @@ export function getDefaultPreferences(): UserPreferences {
     fontSize: 16,
     lineHeight: 1.6,
     letterSpacing: 0,
-    fontFamily: 'Pretendard'
+    fontFamily: 'NanumSquare'
   };
 }
 

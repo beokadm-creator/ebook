@@ -22,7 +22,7 @@ const DEFAULT_SETTINGS: ViewerSettings = {
   fontSize: 18,
   lineHeight: 1.8,
   letterSpacing: 0,
-  fontFamily: 'Pretendard'
+  fontFamily: 'NanumSquare'
 };
 
 function loadFromLocalStorage(): ViewerSettings {

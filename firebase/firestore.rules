@@ -51,6 +51,10 @@ service cloud.firestore {
       }
     }
 
+    match /publishingGlobals/{docId} {
+      allow read, write: if isAdmin();
+    }
+
     // Users - own document can be created on first login, admin can write all
     match /users/{userId} {
       allow read: if isAuthenticated() && (request.auth.uid == userId || isAdmin());

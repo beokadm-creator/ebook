@@ -110,7 +110,7 @@ export const PublicationListSkeleton: React.FC<PublicationListSkeletonProps> = (
   );
 };
 
-interface ViewerSettingsSkeletonProps {}
+type ViewerSettingsSkeletonProps = Record<string, never>;
 
 export const ViewerSettingsSkeleton: React.FC<ViewerSettingsSkeletonProps> = () => {
   return (

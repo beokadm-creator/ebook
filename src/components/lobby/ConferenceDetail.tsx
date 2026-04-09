@@ -83,7 +83,7 @@ const ConferenceDetail: React.FC = () => {
           setSelectedPublication(publicationsData[0]);
         }
 
-      } catch (err: any) {
+      } catch (err: any) { // eslint-disable-line @typescript-eslint/no-explicit-any
         console.error('Error fetching conference data:', err);
         setError('데이터를 불러오는데 실패했습니다.');
       } finally {

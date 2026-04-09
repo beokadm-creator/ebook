@@ -7,8 +7,9 @@ import {
   PlusIcon,
   TrashIcon,
 } from '@heroicons/react/24/outline';
-import { uploadPublicationImage } from '@/lib/publishing/assets';
+import { getRenderableImageUrl, uploadMasterImage, uploadPublicationImage } from '@/lib/publishing/assets';
 import { formatMm, getPxPerMm, pxToMm } from '@/lib/publishing/a4';
+import { getChainRootPageId, inferZoneSlotKey } from '@/lib/publishing/contributionLayout';
 import { getThreadPlainText } from '@/lib/publishing/defaultDocument';
 import { parseDocxManuscriptWithAI } from '@/lib/publishing/docxImport';
 import { glmClient } from '@/lib/ai/glmClient';
@@ -20,6 +21,7 @@ import { usePublishingStore } from '@/stores/publishingStore';
 import { ElementScope, MasterTemplate, PageBlock, PublicationPage, PublishingDocument, TextRole, ZoneKind } from '@/types/publishing';
 import { logError } from '@/utils/errorHandler';
 import FlowGroupContainer from './FlowGroupContainer';
+import SpeakerContributionPanel from './SpeakerContributionPanel';
 
 interface PublishingEditorShellProps {
   publicationId: string;
@@ -72,13 +74,17 @@ const TextBlockView: React.FC<{
       display: 'block',
       width: '100%',
       maxWidth: '100%',
-      fontFamily: zoneStyle.fontFamily,
+      fontFamily: zoneStyle.fontFamily ?? 'NanumSquare',
       fontSize: block.styleOverride?.fontSize ?? zoneStyle.fontSize,
       fontWeight: block.styleOverride?.fontWeight ?? zoneStyle.fontWeight,
       lineHeight: block.styleOverride?.lineHeight ?? zoneStyle.lineHeight,
       letterSpacing: block.styleOverride?.letterSpacing ?? zoneStyle.letterSpacing,
       color: block.styleOverride?.color ?? zoneStyle.color,
       textAlign: block.styleOverride?.textAlign ?? zoneStyle.textAlign,
+      textAlignLast: (block.styleOverride?.textAlign ?? zoneStyle.textAlign) === 'justify' ? 'left' : undefined,
+      textJustify: (block.styleOverride?.textAlign ?? zoneStyle.textAlign) === 'justify' ? 'inter-character' : undefined,
+      textRendering: 'optimizeLegibility',
+      fontKerning: 'normal',
       whiteSpace: 'pre-wrap',
       wordBreak: 'break-word',
       overflowWrap: 'anywhere',
@@ -90,35 +96,6 @@ const TextBlockView: React.FC<{
 );
 
 const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
-
-const getChainRootPageId = (document: PublishingDocument, pageId: string) => {
-  let currentPage = document.pages.find((page) => page.id === pageId);
-  while (currentPage?.derivedFrom?.reason === 'auto-pagination') {
-    const previousPage = document.pages.find((page) => page.id === currentPage?.derivedFrom?.previousPageId);
-    if (!previousPage) {
-      break;
-    }
-    currentPage = previousPage;
-  }
-  return currentPage?.id ?? pageId;
-};
-
-const inferZoneSlotKey = (zone?: MasterTemplate['contentZones'][number]) => {
-  if (!zone) {
-    return undefined;
-  }
-
-  if (zone.slotKey?.trim()) {
-    return zone.slotKey.trim();
-  }
-
-  const target = `${zone.id} ${zone.name}`.toLowerCase();
-  if (target.includes('image')) return 'image';
-  if (target.includes('cover') || target.includes('title')) return 'title';
-  if (target.includes('section') && target.includes('header')) return 'section_title';
-  if (target.includes('intro') || target.includes('summary')) return 'summary';
-  return zone.kind === 'text-flow' ? 'body' : undefined;
-};
 
 const getSlotIdentity = (zone: MasterTemplate['contentZones'][number]) => inferZoneSlotKey(zone) || zone.flowGroupId || zone.id;
 
@@ -152,6 +129,9 @@ const getDecorationCategoryLabel = (decoration: MasterTemplate['decorations'][nu
   if (decoration.textBinding === 'section.number') {
     return '섹션 번호';
   }
+  if (decoration.textBinding === 'presentation.code') {
+    return '발표 번호';
+  }
   if (decoration.textBinding === 'document.title') {
     return '헤더';
   }
@@ -166,6 +146,9 @@ const getDecorationCategoryLabel = (decoration: MasterTemplate['decorations'][nu
   }
   return decoration.type === 'shape' ? '라인/도형' : '기타 텍스트';
 };
+
+const getDecorationImageSrc = (decoration: MasterTemplate['decorations'][number], assets: PublishingDocument['assets']) =>
+  getRenderableImageUrl(decoration.src || assets.find((asset) => asset.id === decoration.assetId)?.src || '');
 
 const SNAP_THRESHOLD_PX = 8;
 
@@ -248,8 +231,10 @@ const ImageBlockView: React.FC<{
       onPointerDown={(event) => startDrag(event, 'move')}
     >
       <img
-        src={block.assetRef.src}
+        src={getRenderableImageUrl(block.assetRef.src)}
         alt={block.alt?.ko || ''}
+        crossOrigin="anonymous"
+        referrerPolicy="no-referrer"
         className="absolute max-w-none"
         draggable={false}
         style={{
@@ -303,6 +288,9 @@ export const PublishingPagePreview: React.FC<{
   const pageNumbering = document.layout.pageNumbering;
   const printGuides = document.layout.printGuides;
   const [activeSnapGuides, setActiveSnapGuides] = useState<ActiveSnapGuides>({ vertical: [], horizontal: [] });
+  const imageRenderProps = mode === 'export'
+    ? ({ crossOrigin: 'anonymous' as const, referrerPolicy: 'no-referrer' as const })
+    : {};
 
   if (!master) {
     return null;
@@ -348,28 +336,18 @@ export const PublishingPagePreview: React.FC<{
     const index = topLevelTocItems.findIndex((item) => item.id === currentTocItem.id);
     return String(index + 1).padStart(2, '0');
   })();
+  const displayPresentationCode = (() => {
+    const rootPageId = getChainRootPageId(document, page.id);
+    return document.contributions.find((item) => item.pageId === rootPageId)?.presentationCode ?? '';
+  })();
 
-  const isEvenDisplayPage = Number(displayPageNumber) % 2 === 0;
   const getPageNumberLayout = (decoration: MasterTemplate['decorations'][number]) => {
-    const safeAreaWidth = pageSize.widthPx - pageSize.safeMarginPx.left - pageSize.safeMarginPx.right;
-    const shouldMirror = (pageNumbering.mirrorOnEvenPages ?? false) && isEvenDisplayPage;
-    const resolvedAlignment =
-      shouldMirror && (pageNumbering.alignmentPreset ?? 'center') !== 'center'
-        ? (pageNumbering.alignmentPreset ?? 'center') === 'left'
-          ? 'right'
-          : 'left'
-        : (pageNumbering.alignmentPreset ?? 'center');
-
     const left =
-      resolvedAlignment === 'left'
-        ? pageSize.safeMarginPx.left
-        : resolvedAlignment === 'right'
-          ? pageSize.widthPx - pageSize.safeMarginPx.right - decoration.width
-          : pageSize.safeMarginPx.left + (safeAreaWidth - decoration.width) / 2;
+      decoration.x;
 
     return {
       left,
-      textAlign: resolvedAlignment === 'center' ? 'center' : resolvedAlignment,
+      textAlign: decoration.style?.textAlign ?? 'center',
     } as const;
   };
 
@@ -382,7 +360,7 @@ export const PublishingPagePreview: React.FC<{
   };
 
   const canEditDecoration = (scope: ElementScope, locked: boolean) =>
-    enableTemplateEditing && mode === 'interactive' && !locked && (scope !== 'global-fixed' ? !master.locked : globalFixedManagerMode);
+    enableTemplateEditing && mode === 'interactive' && !locked && (scope !== 'global-fixed' || globalFixedManagerMode);
 
   const snapHorizontal = (x: number, width: number) => {
     const candidates = [
@@ -526,128 +504,7 @@ export const PublishingPagePreview: React.FC<{
               />
             ))
           : null}
-        {master.decorations.map((decoration) => (
-          decoration.type === 'image' ? (
-            <div
-              key={decoration.id}
-              className={`absolute ${mode === 'interactive' && templateSelection.type === 'decoration' && templateSelection.id === decoration.id ? 'editor-selection-ring ring-2 ring-sky-400 ring-offset-2' : ''} ${decoration.scope === 'global-fixed' ? (globalFixedManagerMode ? 'cursor-move' : 'cursor-default') : 'cursor-move'}`}
-              style={{
-                left: decoration.x,
-                top: decoration.y,
-                width: decoration.width,
-                height: decoration.height,
-              }}
-              onPointerDown={(event) => {
-                if (!canEditDecoration(decoration.scope, decoration.locked)) {
-                  return;
-                }
-                setTemplateSelection({ type: 'decoration', id: decoration.id });
-                bindPointerDrag(
-                  event,
-                  (deltaX, deltaY) => {
-                    const nextX = clamp(decoration.x + deltaX, 0, pageSize.widthPx - 20);
-                    const nextY = clamp(decoration.y + deltaY, 0, pageSize.heightPx - 20);
-                    const snapped = snapDecorationPosition(nextX, nextY, decoration.width, decoration.height);
-                    updateDecorationPosition(decoration.id, snapped);
-                  },
-                  () => setActiveSnapGuides({ vertical: [], horizontal: [] }),
-                );
-              }}
-            >
-              <img
-                src={document.assets.find((asset) => asset.id === decoration.assetId)?.src}
-                alt=""
-                className="h-full w-full object-contain"
-              />
-              {canEditDecoration(decoration.scope, decoration.locked) && templateSelection.type === 'decoration' && templateSelection.id === decoration.id ? (
-                <div
-                  data-html2canvas-ignore="true"
-                  className="editor-handle absolute bottom-[-10px] right-[-10px] h-5 w-5 rounded-full border-2 border-white bg-slate-900 shadow"
-                  onPointerDown={(event) => {
-                    setTemplateSelection({ type: 'decoration', id: decoration.id });
-                    bindPointerDrag(event, (deltaX, deltaY) =>
-                      updateDecorationPosition(decoration.id, {
-                        width: clamp(decoration.width + deltaX, 20, pageSize.widthPx - decoration.x),
-                        height: clamp(decoration.height + deltaY, 20, pageSize.heightPx - decoration.y),
-                      }),
-                    );
-                  }}
-                />
-              ) : null}
-            </div>
-          ) : (
-            (() => {
-              const pageNumberLayout = decoration.textBinding === 'page.number' ? getPageNumberLayout(decoration) : null;
-              return (
-            <div
-              key={decoration.id}
-              className={`absolute ${mode === 'interactive' && templateSelection.type === 'decoration' && templateSelection.id === decoration.id ? 'editor-selection-ring ring-2 ring-sky-400 ring-offset-2' : ''} ${decoration.scope === 'global-fixed' ? (globalFixedManagerMode ? 'cursor-move' : 'cursor-default') : 'cursor-move'}`}
-              style={{
-                left: pageNumberLayout?.left ?? decoration.x,
-                top: decoration.y,
-                width: decoration.width,
-                height: decoration.height,
-                background: decoration.type === 'shape' ? decoration.fill : 'transparent',
-                color: decoration.style?.color ?? '#666666',
-                fontSize: decoration.style?.fontSize ?? 12,
-                fontWeight: decoration.style?.fontWeight ?? 400,
-                lineHeight: decoration.style?.lineHeight ?? 1.4,
-                letterSpacing: decoration.style?.letterSpacing ?? 0,
-                textAlign: pageNumberLayout?.textAlign ?? decoration.style?.textAlign ?? 'center',
-                fontFamily: decoration.style?.fontFamily ?? 'Noto Serif KR',
-              }}
-              onPointerDown={(event) => {
-                if (!canEditDecoration(decoration.scope, decoration.locked)) {
-                  return;
-                }
-                setTemplateSelection({ type: 'decoration', id: decoration.id });
-                bindPointerDrag(
-                  event,
-                  (deltaX, deltaY) => {
-                    const nextX = clamp(decoration.x + deltaX, 0, pageSize.widthPx - 20);
-                    const nextY = clamp(decoration.y + deltaY, 0, pageSize.heightPx - 20);
-                    const snapped = snapDecorationPosition(nextX, nextY, decoration.width, decoration.height);
-                    updateDecorationPosition(decoration.id, snapped);
-                  },
-                  () => setActiveSnapGuides({ vertical: [], horizontal: [] }),
-                );
-              }}
-            >
-              {decoration.textBinding === 'page.number'
-                ? displayPageNumber
-                : decoration.textBinding === 'document.title'
-                  ? document.meta.title.ko
-                  : decoration.textBinding === 'section.number'
-                    ? displaySectionNumber
-                    : decoration.text}
-              {canEditDecoration(decoration.scope, decoration.locked) && templateSelection.type === 'decoration' && templateSelection.id === decoration.id ? (
-                <div
-                  data-html2canvas-ignore="true"
-                  className="editor-handle absolute bottom-[-10px] right-[-10px] h-5 w-5 rounded-full border-2 border-white bg-slate-900 shadow"
-                  onPointerDown={(event) => {
-                    setTemplateSelection({ type: 'decoration', id: decoration.id });
-                    bindPointerDrag(event, (deltaX, deltaY) =>
-                      updateDecorationPosition(decoration.id, {
-                        width: clamp(decoration.width + deltaX, 20, pageSize.widthPx - decoration.x),
-                        height: clamp(decoration.height + deltaY, 20, pageSize.heightPx - decoration.y),
-                      }),
-                    );
-                  }}
-                />
-              ) : null}
-            </div>
-              );
-            })()
-          )
-        ))}
-
 {(() => {
-          // 임시로 빈 함수를 사용 (나중에 prop으로 전달하도록 수정 예정)
-          const capturedHandleThreadOverflow = (threadId: string, overflowText: string, overflowStartOffset: number) => {
-            console.log('Thread overflow detected:', { threadId, overflowText, overflowStartOffset });
-            // TODO: 실제 overflow 처리 로직 구현
-          };
-
           // flowGroupId별로 zone들을 그룹핑
           const flowGroups = new Map<string, typeof master.contentZones>();
           const standaloneZones: typeof master.contentZones = [];
@@ -668,11 +525,6 @@ export const PublishingPagePreview: React.FC<{
 
           const renderedElements: React.ReactElement[] = [];
 
-          const handleOverflow = (threadId: string, overflowText: string, overflowStartOffset: number) => {
-            // 오버플로우 발생 시 다음 페이지에 동일 마스터로 자동 페이지 추가
-            capturedHandleThreadOverflow(threadId, overflowText, overflowStartOffset);
-          };
-
           // FlowGroupContainer로 flowGroup 렌더링
           flowGroups.forEach((zonesInGroup, flowGroupId) => {
             if (!zonesInGroup.length) {
@@ -686,7 +538,6 @@ export const PublishingPagePreview: React.FC<{
                 page={page}
                 document={document}
                 showContentBounds={mode === 'interactive' && printGuides.showContentBounds}
-                onOverflow={handleOverflow}
               />
             );
           });
@@ -810,6 +661,134 @@ export const PublishingPagePreview: React.FC<{
 
           return renderedElements;
         })()}
+
+        {master.decorations.map((decoration) => (
+          decoration.type === 'image' ? (
+            <div
+              key={decoration.id}
+              className={`absolute z-40 ${mode === 'interactive' && templateSelection.type === 'decoration' && templateSelection.id === decoration.id ? 'editor-selection-ring ring-2 ring-sky-400 ring-offset-2' : ''} ${decoration.scope === 'global-fixed' ? (globalFixedManagerMode ? 'cursor-move' : 'cursor-default') : 'cursor-move'}`}
+              style={{
+                left: decoration.x,
+                top: decoration.y,
+                width: decoration.width,
+                height: decoration.height,
+              }}
+              onPointerDown={(event) => {
+                if (!canEditDecoration(decoration.scope, decoration.locked)) {
+                  return;
+                }
+                setTemplateSelection({ type: 'decoration', id: decoration.id });
+                bindPointerDrag(
+                  event,
+                  (deltaX, deltaY) => {
+                    const nextX = clamp(decoration.x + deltaX, 0, pageSize.widthPx - 20);
+                    const nextY = clamp(decoration.y + deltaY, 0, pageSize.heightPx - 20);
+                    const snapped = snapDecorationPosition(nextX, nextY, decoration.width, decoration.height);
+                    updateDecorationPosition(decoration.id, snapped);
+                  },
+                  () => setActiveSnapGuides({ vertical: [], horizontal: [] }),
+                );
+              }}
+            >
+              {getDecorationImageSrc(decoration, document.assets) ? (
+                <img
+                  src={getDecorationImageSrc(decoration, document.assets)}
+                  alt=""
+                  {...imageRenderProps}
+                  className="h-full w-full object-contain"
+                  style={{ display: 'block' }}
+                />
+              ) : null}
+              {!getDecorationImageSrc(decoration, document.assets) ? (
+                <div className="flex h-full w-full items-center justify-center rounded border border-dashed border-slate-300 bg-slate-100 text-[11px] text-slate-500">
+                  이미지 없음
+                </div>
+              ) : null}
+              {canEditDecoration(decoration.scope, decoration.locked) && templateSelection.type === 'decoration' && templateSelection.id === decoration.id ? (
+                <div
+                  data-html2canvas-ignore="true"
+                  className="editor-handle absolute bottom-[-10px] right-[-10px] h-5 w-5 rounded-full border-2 border-white bg-slate-900 shadow"
+                  onPointerDown={(event) => {
+                    setTemplateSelection({ type: 'decoration', id: decoration.id });
+                    bindPointerDrag(event, (deltaX, deltaY) =>
+                      updateDecorationPosition(decoration.id, {
+                        width: clamp(decoration.width + deltaX, 20, pageSize.widthPx - decoration.x),
+                        height: clamp(decoration.height + deltaY, 20, pageSize.heightPx - decoration.y),
+                      }),
+                    );
+                  }}
+                />
+              ) : null}
+            </div>
+          ) : (
+            (() => {
+              const pageNumberLayout = decoration.textBinding === 'page.number' ? getPageNumberLayout(decoration) : null;
+              return (
+                <div
+                  key={decoration.id}
+                  className={`absolute z-40 ${mode === 'interactive' && templateSelection.type === 'decoration' && templateSelection.id === decoration.id ? 'editor-selection-ring ring-2 ring-sky-400 ring-offset-2' : ''} ${decoration.scope === 'global-fixed' ? (globalFixedManagerMode ? 'cursor-move' : 'cursor-default') : 'cursor-move'}`}
+                  style={{
+                    left: pageNumberLayout?.left ?? decoration.x,
+                    top: decoration.y,
+                    width: decoration.width,
+                    height: decoration.height,
+                    background: decoration.type === 'shape' ? decoration.fill ?? '#cbd5e1' : 'transparent',
+                    borderTop: decoration.type === 'shape' && decoration.shape === 'line' ? `2px solid ${decoration.fill ?? '#cbd5e1'}` : undefined,
+                    borderRadius: decoration.type === 'shape' && decoration.shape === 'ellipse' ? 9999 : undefined,
+                    color: decoration.style?.color ?? '#666666',
+                    fontSize: decoration.style?.fontSize ?? 12,
+                    fontWeight: decoration.style?.fontWeight ?? 400,
+                    lineHeight: decoration.style?.lineHeight ?? 1.4,
+                    letterSpacing: decoration.style?.letterSpacing ?? 0,
+                    textAlign: pageNumberLayout?.textAlign ?? decoration.style?.textAlign ?? 'center',
+                    fontFamily: decoration.style?.fontFamily ?? 'NanumSquare',
+                  }}
+                  onPointerDown={(event) => {
+                    if (!canEditDecoration(decoration.scope, decoration.locked)) {
+                      return;
+                    }
+                    setTemplateSelection({ type: 'decoration', id: decoration.id });
+                    bindPointerDrag(
+                      event,
+                      (deltaX, deltaY) => {
+                        const nextX = clamp(decoration.x + deltaX, 0, pageSize.widthPx - 20);
+                        const nextY = clamp(decoration.y + deltaY, 0, pageSize.heightPx - 20);
+                        const snapped = snapDecorationPosition(nextX, nextY, decoration.width, decoration.height);
+                        updateDecorationPosition(decoration.id, snapped);
+                      },
+                      () => setActiveSnapGuides({ vertical: [], horizontal: [] }),
+                    );
+                  }}
+                >
+                  {decoration.textBinding === 'page.number'
+                    ? displayPageNumber
+                    : decoration.textBinding === 'document.title'
+                      ? document.meta.title.ko
+                      : decoration.textBinding === 'section.number'
+                        ? displaySectionNumber
+                        : decoration.textBinding === 'presentation.code'
+                          ? displayPresentationCode
+                          : decoration.text}
+                  {canEditDecoration(decoration.scope, decoration.locked) && templateSelection.type === 'decoration' && templateSelection.id === decoration.id ? (
+                    <div
+                      data-html2canvas-ignore="true"
+                      className="editor-handle absolute bottom-[-10px] right-[-10px] h-5 w-5 rounded-full border-2 border-white bg-slate-900 shadow"
+                      onPointerDown={(event) => {
+                        setTemplateSelection({ type: 'decoration', id: decoration.id });
+                        bindPointerDrag(event, (deltaX, deltaY) =>
+                          updateDecorationPosition(decoration.id, {
+                            width: clamp(decoration.width + deltaX, 20, pageSize.widthPx - decoration.x),
+                            height: clamp(decoration.height + deltaY, 20, pageSize.heightPx - decoration.y),
+                          }),
+                        );
+                      }}
+                    />
+                  ) : null}
+                </div>
+              );
+            })()
+          )
+        ))}
       </div>
     </div>
   );
@@ -831,6 +810,9 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
     renameMaster,
     updatePageMaster,
     updateDocumentMeta,
+    addPresentationTrack,
+    updatePresentationTrack,
+    deletePresentationTrack,
     updatePageNumbering,
     updatePrintGuides,
     updateMasterBackground,
@@ -846,7 +828,13 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
     toggleThreadToc,
     deleteThread,
     addThreadWithText,
-    addThreadsFromParsedContent,
+    addContribution,
+    createSpeakerContribution,
+    updateContributionSlotText,
+    updateContributionPresentationTrack,
+    updateContributionStatus,
+    moveContribution,
+    deleteContribution,
     addImageBlock,
     updateImageBlock,
     toggleBlockLock,
@@ -878,6 +866,8 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
   const [importingDocx, setImportingDocx] = useState(false);
   const [useAIParsing, setUseAIParsing] = useState(true);
   const [testingAI, setTestingAI] = useState(false);
+  const [editingContributionSlot, setEditingContributionSlot] = useState<string | null>(null);
+  const [editingContributionValue, setEditingContributionValue] = useState('');
   const pageRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const pdfPageRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const measurementRootRef = useRef<HTMLDivElement | null>(null);
@@ -887,6 +877,26 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
   const selectedPage = document.pages.find((item) => item.id === selection.pageId) ?? document.pages[1] ?? document.pages[0];
   const pageMaster = document.masters.items.find((item) => item.id === selectedPage?.masterId) ?? document.masters.items[0];
   const selectedMaster = document.masters.items.find((item) => item.id === activeMasterId) ?? pageMaster ?? document.masters.items[0];
+  const selectedContribution = useMemo(() => {
+    const rootPageId = selectedPage ? getChainRootPageId(document, selectedPage.id) : null;
+    return document.contributions.find((item) => item.pageId === rootPageId) ?? null;
+  }, [document, selectedPage]);
+  const isSpeakerThreadPage = pageMaster?.mode === 'speaker-thread';
+  const currentSpeakerMasterUsesPresentationTracks = Boolean(isSpeakerThreadPage && pageMaster?.usesPresentationTracks);
+  const selectedContributionPages = useMemo(() => {
+    if (!selectedContribution) {
+      return selectedPage ? [selectedPage] : [];
+    }
+
+    return document.pages.filter((page) => getChainRootPageId(document, page.id) === selectedContribution.pageId);
+  }, [document, selectedContribution, selectedPage]);
+  const pageNumberByContribution = useMemo(
+    () => Object.fromEntries(document.contributions.map((item) => {
+      const page = document.pages.find((candidate) => candidate.id === item.pageId);
+      return [item.id, page?.pageNumber ?? 0];
+    })),
+    [document.contributions, document.pages],
+  );
   const selectedZoneId =
     (activeContentZoneId && pageMaster?.contentZones.some((zone) => zone.id === activeContentZoneId) ? activeContentZoneId : undefined)
     ?? (selection.zoneId && pageMaster?.contentZones.some((zone) => zone.id === selection.zoneId) ? selection.zoneId : undefined)
@@ -1100,20 +1110,27 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
       setImportingDocx(true);
       const parsed = await parseDocxManuscriptWithAI(file, useAIParsing);
       const rootPageId = getChainRootPageId(document, selectedPage.id);
+      const blankSelectedContribution =
+        selectedContribution
+        && selectedContribution.pageId === rootPageId
+        && selectedContribution.slots.every((slot) => !slot.text.trim());
       let applied = 0;
 
       // AI 파싱이 성공한 경우
-      if (useAIParsing && parsed.aiParsedContent && !parsed.aiParsingError) {
-        const threadsData = parsed.aiParsedContent.map(thread => ({
-          text: thread.text,
-          role: thread.role,
-        }));
+      if (parsed.contributionDraft.slots.length > 0) {
+        if (blankSelectedContribution) {
+          parsed.contributionDraft.slots.forEach((slot) => {
+            updateContributionSlotText(selectedContribution.id, slot.slotKey, slot.text);
+          });
+          applied = parsed.contributionDraft.slots.length;
+          showToast(`발표자 원고 ${parsed.contributionDraft.title} 반영 완료`, 'success');
+          return;
+        }
 
-        const createdThreadIds = addThreadsFromParsedContent(rootPageId, threadsData);
-        applied = createdThreadIds.length;
-
-        if (applied > 0) {
-          showToast(`AI로 파싱한 컨텐츠 ${applied}개 반영 완료`, 'success');
+        const contributionId = addContribution(rootPageId, parsed.contributionDraft);
+        if (contributionId) {
+          applied = parsed.contributionDraft.slots.length;
+          showToast(`발표자 원고 ${parsed.contributionDraft.title} 반영 완료`, 'success');
           return;
         }
       }
@@ -1149,6 +1166,22 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
     }
   };
 
+  const handleCreateSpeakerContribution = useCallback(() => {
+    if (!selectedPage) {
+      showToast('페이지를 먼저 선택하세요.', 'error');
+      return;
+    }
+
+    const rootPageId = getChainRootPageId(document, selectedPage.id);
+    const contributionId = createSpeakerContribution(rootPageId, pageMaster?.id);
+    if (!contributionId) {
+      showToast('새 발표자 스레드를 만들지 못했습니다.', 'error');
+      return;
+    }
+
+    showToast('빈 발표자 스레드를 생성했습니다. 슬롯을 채우거나 워드를 가져오세요.', 'success');
+  }, [createSpeakerContribution, document, pageMaster?.id, selectedPage]);
+
   const handleTestAIConnection = async () => {
     if (!glmClient.isConfigured()) {
       showToast('GLM API Key가 설정되지 않았습니다. AI 기능 없이도 일반 편집은 가능합니다.', 'info');
@@ -1165,6 +1198,40 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
       setTestingAI(false);
     }
   };
+
+  const handleStartContributionSlotEdit = useCallback((slotKey: string, value: string) => {
+    setEditingContributionSlot(slotKey);
+    setEditingContributionValue(value);
+  }, []);
+
+  const handleSaveContributionSlotEdit = useCallback(() => {
+    if (!selectedContribution || !editingContributionSlot) {
+      return;
+    }
+
+    updateContributionSlotText(selectedContribution.id, editingContributionSlot, editingContributionValue);
+    setEditingContributionSlot(null);
+    setEditingContributionValue('');
+    showToast('발표자 원고 슬롯을 수정했습니다.', 'success');
+  }, [editingContributionSlot, editingContributionValue, selectedContribution, updateContributionSlotText]);
+
+  const handleCompleteContribution = useCallback(() => {
+    if (!selectedContribution) {
+      return;
+    }
+
+    updateContributionStatus(selectedContribution.id, 'completed');
+    showToast('발표자 원고를 완료 저장했습니다.', 'success');
+  }, [selectedContribution, updateContributionStatus]);
+
+  const handlePresentationTrackChange = useCallback((contributionId: string, trackId: string) => {
+    updateContributionPresentationTrack(contributionId, trackId);
+    showToast('발표 번호 그룹을 변경했습니다.', 'success');
+  }, [updateContributionPresentationTrack]);
+  const handleAddPresentationTrack = useCallback((kind: 'oral' | 'poster') => {
+    addPresentationTrack(kind);
+    showToast(`${kind === 'oral' ? '구연' : '포스터'} 트랙을 추가했습니다.`, 'success');
+  }, [addPresentationTrack]);
   const selectedBlock = useMemo(() => {
     const page = document.pages.find((item) => item.id === selection.pageId);
     const zone = page?.zones.find((item) => item.zoneId === selection.zoneId);
@@ -1284,28 +1351,6 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
           });
         }
       }
-
-      master.contentZones.forEach((zone) => {
-        if (!zone?.frame) {
-          return;
-        }
-
-        const safeLeft = document.layout.pagePreset.safeMarginPx.left;
-        const safeTop = document.layout.pagePreset.safeMarginPx.top;
-        const safeRight = document.layout.pagePreset.widthPx - document.layout.pagePreset.safeMarginPx.right;
-        const safeBottom = document.layout.pagePreset.heightPx - document.layout.pagePreset.safeMarginPx.bottom;
-        const zoneRight = zone.frame.x + zone.frame.width;
-        const zoneBottom = zone.frame.y + zone.frame.height;
-
-        if (zone.frame.x < safeLeft || zone.frame.y < safeTop || zoneRight > safeRight || zoneBottom > safeBottom) {
-          issues.push({
-            id: `${page.id}-${zone.id}-safe-area`,
-            severity: 'error',
-            message: `${page.id}의 ${zone.name} 영역이 안전영역을 벗어났습니다.`,
-            pageId: page.id,
-          });
-        }
-      });
 
       page.zones.forEach((zoneInstance) => {
         const zoneTemplate = master.contentZones.find((item) => item.id === zoneInstance.zoneId && item.frame);
@@ -1550,7 +1595,7 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
       try {
         setUploadingMasterImage(true);
         setMasterUploadProgress(0);
-        const uploaded = await uploadPublicationImage(publicationId, file, setMasterUploadProgress);
+        const uploaded = await uploadMasterImage(file, setMasterUploadProgress);
         addMasterImageDecoration(selectedMaster.id, uploaded);
         showToast('마스터 이미지가 업로드되었습니다.', 'success');
       } catch (error) {
@@ -1562,7 +1607,7 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
         event.target.value = '';
       }
     },
-    [addMasterImageDecoration, publicationId, selectedMaster],
+    [addMasterImageDecoration, selectedMaster],
   );
 
   const updateSelectedDecorationFields = useCallback(
@@ -1689,23 +1734,45 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
         </div>
 
         <div className="mb-6 rounded-3xl border border-slate-900 bg-slate-900 p-4 text-white">
-          <div className="text-sm font-semibold">글 입력</div>
-          <div className="mt-1 text-xs text-slate-300">페이지 선택 후 아래 버튼을 누르면 입력창이 열립니다.</div>
+          <div className="text-sm font-semibold">{isSpeakerThreadPage ? '발표자 원고' : '페이지 편집'}</div>
+          <div className="mt-1 text-xs text-slate-300">
+            {isSpeakerThreadPage
+              ? 'DOCX 한 개를 발표자 1명 단위로 등록하고, 슬롯별로 내용을 점검합니다.'
+              : '현재 페이지에 텍스트와 이미지를 수동 배치할 수 있습니다.'}
+          </div>
           <div className="mt-4 grid gap-2">
-            <button
-              type="button"
-              onClick={() => openTextModalForCreate()}
-              className="rounded-2xl bg-white px-4 py-3 text-sm font-semibold text-slate-900"
-            >
-              텍스트 넣기
-            </button>
+            {!isSpeakerThreadPage ? (
+              <button
+                type="button"
+                onClick={() => openTextModalForCreate()}
+                className="rounded-2xl bg-white px-4 py-3 text-sm font-semibold text-slate-900"
+              >
+                텍스트 넣기
+              </button>
+            ) : null}
+            <label className={`rounded-2xl ${isSpeakerThreadPage ? 'bg-white text-slate-900' : 'border border-white/20 text-white'} px-4 py-3 text-sm font-semibold ${importingDocx ? 'cursor-wait opacity-60' : 'cursor-pointer'}`}>
+              원고 가져오기
+              <input
+                type="file"
+                accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                className="hidden"
+                disabled={importingDocx}
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  if (file) {
+                    void handleImportDocx(file);
+                  }
+                  event.target.value = '';
+                }}
+              />
+            </label>
             <button
               type="button"
               onClick={() => {
                 setImageModalZoneId(primaryImageZoneId);
                 setShowImageModal(true);
               }}
-              className="rounded-2xl border border-white/20 px-4 py-3 text-sm font-semibold text-white"
+              className={`rounded-2xl px-4 py-3 text-sm font-semibold ${isSpeakerThreadPage ? 'border border-white/20 text-white' : 'border border-white/20 text-white'}`}
             >
               이미지 넣기
             </button>
@@ -1721,14 +1788,16 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
           </button>
           {selectedPage ? (
             <>
-              <button
-                type="button"
-                onClick={() => openTextModalForCreate()}
-                className="inline-flex items-center gap-2 rounded-full border border-slate-200 px-4 py-2 text-sm font-medium"
-              >
-                <PlusIcon className="h-4 w-4" />
-                텍스트 추가
-              </button>
+              {!isSpeakerThreadPage ? (
+                <button
+                  type="button"
+                  onClick={() => openTextModalForCreate()}
+                  className="inline-flex items-center gap-2 rounded-full border border-slate-200 px-4 py-2 text-sm font-medium"
+                >
+                  <PlusIcon className="h-4 w-4" />
+                  텍스트 추가
+                </button>
+              ) : null}
               <button
                 type="button"
                 onClick={() => {
@@ -1740,23 +1809,27 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
                 <PhotoIcon className="h-4 w-4" />
                 이미지 추가
               </button>
-              <button
-                type="button"
-                onClick={() => addPage(selectedPage.masterId)}
-                className="inline-flex items-center gap-2 rounded-full border border-slate-200 px-4 py-2 text-sm font-medium"
-              >
-                <PlusIcon className="h-4 w-4" />
-                페이지 추가
-              </button>
-              <button
-                type="button"
-                onClick={() => deletePage(selectedPage.id)}
-                disabled={document.pages.length <= 1 || selectedPage.pageRole === 'cover'}
-                className="inline-flex items-center gap-2 rounded-full border border-rose-200 bg-rose-50 px-4 py-2 text-sm font-medium text-rose-700 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                <TrashIcon className="h-4 w-4" />
-                페이지 삭제
-              </button>
+              {!isSpeakerThreadPage ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => addPage(selectedPage.masterId)}
+                    className="inline-flex items-center gap-2 rounded-full border border-slate-200 px-4 py-2 text-sm font-medium"
+                  >
+                    <PlusIcon className="h-4 w-4" />
+                    페이지 추가
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => deletePage(selectedPage.id)}
+                    disabled={document.pages.length <= 1 || selectedPage.pageRole === 'cover'}
+                    className="inline-flex items-center gap-2 rounded-full border border-rose-200 bg-rose-50 px-4 py-2 text-sm font-medium text-rose-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <TrashIcon className="h-4 w-4" />
+                    페이지 삭제
+                  </button>
+                </>
+              ) : null}
               <label className="inline-flex items-center gap-2 rounded-full border border-slate-200 px-4 py-2 text-sm font-medium">
                 <input
                   type="checkbox"
@@ -1774,23 +1847,11 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
               >
                 GLM 연결 테스트
               </button>
-              <label className={`inline-flex items-center gap-2 rounded-full border border-slate-200 px-4 py-2 text-sm font-medium ${importingDocx ? 'cursor-wait opacity-60' : 'cursor-pointer'}`}>
-                <PlusIcon className="h-4 w-4" />
-                원고 가져오기
-                <input
-                  type="file"
-                  accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                  className="hidden"
-                  disabled={importingDocx}
-                  onChange={(event) => {
-                    const file = event.target.files?.[0];
-                    if (file) {
-                      void handleImportDocx(file);
-                    }
-                    event.target.value = '';
-                  }}
-                />
-              </label>
+              {!isSpeakerThreadPage ? null : (
+                <span className="inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-medium text-emerald-700">
+                  발표자형 마스터
+                </span>
+              )}
             </>
           ) : null}
         </div>
@@ -1823,7 +1884,86 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
           <p className="mt-2 text-xs text-slate-400">업로드 후 배치</p>
         </div>
 
-        {false && <div className="mb-6 rounded-3xl border border-slate-200 bg-slate-50 p-4">
+        {isSpeakerThreadPage && currentSpeakerMasterUsesPresentationTracks ? (
+          <div className="mb-6 rounded-3xl border border-slate-200 bg-slate-50 p-4">
+            <div className="mb-3 flex items-start justify-between gap-3">
+              <div>
+                <p className="text-sm font-semibold text-slate-800">발표 트랙 목록</p>
+                <p className="mt-1 text-xs text-slate-500">GLM 감지 보조와 발표 번호 그룹에 함께 사용됩니다.</p>
+              </div>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleAddPresentationTrack('oral')}
+                  className="rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700"
+                >
+                  구연 추가
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleAddPresentationTrack('poster')}
+                  className="rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700"
+                >
+                  포스터 추가
+                </button>
+              </div>
+            </div>
+            <div className="space-y-3">
+              {(document.meta.presentationTracks ?? []).map((track) => (
+                <div key={track.id} className="rounded-2xl border border-slate-200 bg-white p-3">
+                  <div className="mb-3 flex items-center justify-between gap-3">
+                    <span className={`rounded-full px-3 py-1 text-xs font-semibold ${track.kind === 'oral' ? 'bg-sky-50 text-sky-700' : 'bg-amber-50 text-amber-700'}`}>
+                      {track.kind === 'oral' ? '구연' : '포스터'}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        deletePresentationTrack(track.id);
+                        showToast('발표 트랙을 삭제했습니다.', 'success');
+                      }}
+                      className="rounded-full border border-rose-200 bg-rose-50 p-2 text-rose-700"
+                    >
+                      <TrashIcon className="h-4 w-4" />
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-[88px_1fr] gap-2">
+                    <input
+                      value={track.prefix}
+                      onChange={(event) => updatePresentationTrack(track.id, { prefix: event.target.value.toUpperCase() })}
+                      className="rounded-xl border border-slate-200 px-3 py-2 text-sm font-semibold"
+                      placeholder="O1"
+                    />
+                    <input
+                      value={track.label}
+                      onChange={(event) => updatePresentationTrack(track.id, { label: event.target.value })}
+                      className="rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                      placeholder="트랙 이름"
+                    />
+                  </div>
+                  <label className="mt-3 block">
+                    <span className="mb-1 block text-xs font-semibold text-slate-500">GLM 힌트 문구</span>
+                    <textarea
+                      value={(track.glmHints ?? []).join('\n')}
+                      onChange={(event) =>
+                        updatePresentationTrack(track.id, {
+                          glmHints: event.target.value
+                            .split('\n')
+                            .map((value) => value.trim())
+                            .filter(Boolean),
+                        })
+                      }
+                      rows={3}
+                      className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                      placeholder={`예:\n${track.prefix}.${track.label}\n${track.label}`}
+                    />
+                  </label>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
+        {false && /* eslint-disable-line no-constant-binary-expression, no-constant-condition */ <div className="mb-6 rounded-3xl border border-slate-200 bg-slate-50 p-4">
           <div className="mb-3 text-sm font-semibold text-slate-800">페이지 번호</div>
           <label className="mb-3 flex items-center justify-between rounded-2xl bg-white px-4 py-3 text-sm">
             <span>표시</span>
@@ -1900,7 +2040,7 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
           </label>
         </div>}
 
-        {false && <div className="mb-6 rounded-3xl border border-slate-200 bg-slate-50 p-4">
+        {false && /* eslint-disable-line no-constant-binary-expression, no-constant-condition */ <div className="mb-6 rounded-3xl border border-slate-200 bg-slate-50 p-4">
           <div className="mb-3 text-sm font-semibold text-slate-800">출력 가이드</div>
           <label className="mb-3 flex items-center justify-between rounded-2xl bg-white px-4 py-3 text-sm">
             <span>안전 영역</span>
@@ -1959,7 +2099,7 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
           </div>
         </div>}
 
-        {false && selectedMaster ? (
+        {false && /* eslint-disable-line no-constant-binary-expression, no-constant-condition */ selectedMaster ? (
           <div className="mb-6 rounded-3xl border border-slate-200 bg-slate-50 p-4">
             <div className="mb-3 flex items-center justify-between">
               <div>
@@ -2110,7 +2250,7 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
           </div>
         ) : null}
 
-        {false && selectedMaster ? (
+        {false && /* eslint-disable-line no-constant-binary-expression, no-constant-condition */ selectedMaster ? (
           <div className="mb-6 rounded-3xl border border-slate-200 bg-slate-50 p-4">
             <div className="mb-4 rounded-2xl bg-white p-3">
               <div className="mb-3 flex items-center justify-between">
@@ -2334,11 +2474,19 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
 
                   {decoration.type === 'image' ? (
                     <div className="mb-3">
-                      <img
-                        src={document.assets.find((asset) => asset.id === decoration.assetId)?.src}
-                        alt=""
-                        className="h-20 w-full rounded-xl bg-slate-50 object-contain"
-                      />
+                      {getDecorationImageSrc(decoration, document.assets) ? (
+                        <img
+                          src={getDecorationImageSrc(decoration, document.assets)}
+                          alt=""
+                          crossOrigin="anonymous"
+                          referrerPolicy="no-referrer"
+                          className="h-20 w-full rounded-xl bg-slate-50 object-contain"
+                        />
+                      ) : (
+                        <div className="flex h-20 w-full items-center justify-center rounded-xl border border-dashed border-slate-300 bg-slate-50 text-xs text-slate-500">
+                          이미지 없음
+                        </div>
+                      )}
                     </div>
                   ) : null}
 
@@ -2432,7 +2580,7 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
         {null}
 
         <div className="space-y-5 overflow-y-auto pb-10">
-          {currentPageTextSlots.map(({ key, zone, thread }) => (
+          {!isSpeakerThreadPage ? currentPageTextSlots.map(({ key, zone, thread }) => (
             <section key={key} className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
               <div className="mb-3 flex items-center justify-between gap-3">
                 <div>
@@ -2497,8 +2645,8 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
                 {thread ? `${thread.zoneSequence.length} page · ${roleLabel[thread.semanticRole]}` : '빈 슬롯'}
               </p>
             </section>
-          ))}
-          {!currentPageTextSlots.length ? (
+          )) : null}
+          {!isSpeakerThreadPage && !currentPageTextSlots.length ? (
             <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-5 text-sm text-slate-500">
               현재 페이지 텍스트 슬롯 없음
             </div>
@@ -2507,6 +2655,7 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
       </aside>
 
       <main className="flex-1 px-8 py-6">
+        {!isSpeakerThreadPage ? (
         <div className="fixed left-1/2 top-24 z-30 -translate-x-1/2 rounded-2xl border border-slate-200 bg-white/95 p-3 shadow-xl backdrop-blur">
           <div className="flex items-center gap-2">
             <button
@@ -2524,7 +2673,10 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
             >
               {document.pages.map((page) => (
                 <option key={page.id} value={page.id}>
-                  {page.pageNumber}p
+                  {(() => {
+                    const contribution = document.contributions.find((item) => item.pageId === getChainRootPageId(document, page.id));
+                    return contribution ? `${page.pageNumber}p · ${contribution.title}` : `${page.pageNumber}p`;
+                  })()}
                 </option>
               ))}
             </select>
@@ -2558,12 +2710,13 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
             </button>
           </div>
         </div>
+        ) : null}
         <div className="editor-toolbar mb-6 flex flex-wrap items-center justify-between gap-4">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.25em] text-slate-500">A4 Publishing Editor</p>
             <h1 className="mt-2 font-serif text-3xl tracking-tight text-slate-900">{document.meta.title.ko}</h1>
             <p className="mt-2 text-sm text-slate-500">
-              Revision {history.revision} · Pages {document.pages.length} · {autosave.lastError ? autosave.lastError : autosave.isSaving ? '저장 중' : autosave.lastSavedAt ? '저장 완료' : '편집 중'}
+              Revision {history.revision} · Contributions {document.contributions.length} · Pages {document.pages.length} · {autosave.lastError ? autosave.lastError : autosave.isSaving ? '저장 중' : autosave.lastSavedAt ? '저장 완료' : '편집 중'}
             </p>
           </div>
           <button
@@ -2578,7 +2731,27 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
 
         <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_320px]">
           <section className="overflow-auto rounded-[32px] border border-slate-200 bg-[#ece6da] px-6 py-8">
-            {selectedPage ? (
+            {isSpeakerThreadPage ? (
+              <div className="space-y-8">
+                {selectedContributionPages.map((page) => (
+                  <PublishingPagePreview
+                    key={page.id}
+                    page={page}
+                    pageIndex={page.pageNumber - 1}
+                    templateSelection={templateSelection}
+                    setTemplateSelection={setTemplateSelection}
+                    mode="interactive"
+                    globalFixedManagerMode={globalFixedManagerMode}
+                    onTextBlockOpen={handleCanvasTextOpen}
+                    onZoneActivate={handleZoneActivate}
+                    enableTemplateEditing={false}
+                    pageRef={(node) => {
+                      pageRefs.current[page.id] = node;
+                    }}
+                  />
+                ))}
+              </div>
+            ) : selectedPage ? (
               <PublishingPagePreview
                 key={selectedPage.id}
                 page={selectedPage}
@@ -2598,9 +2771,44 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
           </section>
 
           <aside className="space-y-4 rounded-[28px] border border-slate-200 bg-white p-5 [&_input]:bg-white [&_input]:text-slate-900 [&_select]:bg-white [&_select]:text-slate-900 [&_textarea]:bg-white [&_textarea]:text-slate-900">
+            {isSpeakerThreadPage ? (
+              <SpeakerContributionPanel
+                contributions={document.contributions}
+                selectedContribution={selectedContribution}
+                presentationTracks={document.meta.presentationTracks ?? []}
+                showPresentationTracks={currentSpeakerMasterUsesPresentationTracks}
+                pageNumberByContribution={pageNumberByContribution}
+                roleLabel={roleLabel}
+                onCreateContribution={handleCreateSpeakerContribution}
+                onCompleteContribution={handleCompleteContribution}
+                onChangePresentationTrack={handlePresentationTrackChange}
+                editingSlotKey={editingContributionSlot}
+                editingValue={editingContributionValue}
+                onSelectContribution={selectPage}
+                onMoveContribution={moveContribution}
+                onDeleteContribution={(contributionId) => {
+                  deleteContribution(contributionId);
+                  showToast('발표자 원고를 삭제했습니다.', 'success');
+                }}
+                onStartEditSlot={handleStartContributionSlotEdit}
+                onEditingValueChange={setEditingContributionValue}
+                onSaveSlot={handleSaveContributionSlotEdit}
+                onCancelSlot={() => {
+                  setEditingContributionSlot(null);
+                  setEditingContributionValue('');
+                }}
+              />
+            ) : null}
             <div className="rounded-2xl bg-slate-50 p-4 text-sm text-slate-600">
-              <p className="mb-3 font-semibold text-slate-800">페이지 정보</p>
-              <p>현재 페이지: {selectedPage?.pageNumber ?? '-'}</p>
+              <p className="mb-3 font-semibold text-slate-800">{isSpeakerThreadPage ? '발표자 정보' : '페이지 정보'}</p>
+              {selectedContribution ? (
+                <>
+                  <p>발표자 항목: {selectedContribution.title}</p>
+                  <p>등록 순서: {selectedContribution.order}</p>
+                  <p>원고 슬롯: {selectedContribution.slots.length}</p>
+                </>
+              ) : null}
+              <p>{isSpeakerThreadPage ? '표시 페이지 수' : '현재 페이지'}: {isSpeakerThreadPage ? selectedContributionPages.length : selectedPage?.pageNumber ?? '-'}</p>
               <p>현재 마스터: {pageMaster?.name ?? '-'}</p>
               <p>선택 영역: {selection.zoneId ?? '없음'}</p>
               <p>저장 상태: {autosave.lastError || (autosave.isSaving ? '저장 중' : autosave.dirty ? '수정됨' : '저장됨')}</p>
@@ -2726,7 +2934,7 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
 
             {null}
 
-            {false && <div className="rounded-2xl bg-slate-50 p-4 text-sm text-slate-600">
+            {false && /* eslint-disable-line no-constant-binary-expression, no-constant-condition */ <div className="rounded-2xl bg-slate-50 p-4 text-sm text-slate-600">
               <p className="mb-3 font-semibold text-slate-800">Publication</p>
               <p>ID: {publicationId}</p>
               <p>Preset: {document.layout.pagePreset.key}</p>

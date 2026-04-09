@@ -1,6 +1,28 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { ContentZoneTemplate, PublicationPage, PublishingDocument, TextThread } from '@/types/publishing';
+import { useMemo } from 'react';
+import { ContentZoneTemplate, PublicationPage, PublishingDocument, TextRun, TextThread } from '@/types/publishing';
 import { renderRunsToReact } from '@/lib/publishing/richText';
+
+const getFlowGroupZIndex = (zone?: ContentZoneTemplate) => {
+  if (!zone) {
+    return 1;
+  }
+
+  if (zone.slotKey === 'track') {
+    return 30;
+  }
+
+  if (zone.slotKey?.startsWith('title')) {
+    return 20;
+  }
+
+  if (zone.slotKey?.startsWith('authors') || zone.slotKey?.startsWith('affiliation')) {
+    return 15;
+  }
+
+  return 1;
+};
+
+const shouldAllowVisibleOverflow = (zone?: ContentZoneTemplate) => zone?.slotKey === 'track';
 
 interface FlowGroupContainerProps {
   zonesInGroup: ContentZoneTemplate[];
@@ -8,35 +30,7 @@ interface FlowGroupContainerProps {
   document: PublishingDocument;
   showContentBounds?: boolean;
   className?: string;
-  onOverflow?: (threadId: string, overflowText: string, overflowStartOffset: number) => void;
-  maxChars?: number;
 }
-
-const findOverflowCutPoint = (container: HTMLElement, maxScrollTop: number): number => {
-  const treeWalker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, null);
-  let totalChars = 0;
-
-  while (treeWalker.nextNode()) {
-    const textNode = treeWalker.currentNode as Text;
-    const containerRect = container.getBoundingClientRect();
-
-    for (let i = 0; i < textNode.length; i++) {
-      const range = document.createRange();
-      range.setStart(textNode, i);
-      range.setEnd(textNode, i + 1);
-      const rect = range.getClientRects()[0];
-      if (!rect) { totalChars++; continue; }
-
-      const relativeTop = rect.top - containerRect.top;
-      if (relativeTop > maxScrollTop) {
-        return totalChars;
-      }
-      totalChars++;
-    }
-  }
-
-  return totalChars;
-};
 
 export default function FlowGroupContainer({
   zonesInGroup,
@@ -44,12 +38,7 @@ export default function FlowGroupContainer({
   document,
   showContentBounds = false,
   className = '',
-  onOverflow,
-  maxChars,
 }: FlowGroupContainerProps) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [overflowHandled, setOverflowHandled] = useState(false);
-
   const { containerStyle, displayTexts } = useMemo(() => {
     if (!zonesInGroup.length) {
       return { containerStyle: {}, displayTexts: [] };
@@ -82,16 +71,10 @@ export default function FlowGroupContainer({
     const maxX = Math.max(...zonesInGroup.map((z) => z.frame.x + z.frame.width));
     const maxY = Math.max(...zonesInGroup.map((z) => z.frame.y + z.frame.height));
 
-    const texts: { threadId: string; text: string; runs: any[] }[] = [];
-    let charsRemaining = maxChars ?? Infinity;
-
+    const texts: { threadId: string; text: string; runs: TextRun[] }[] = [];
     for (const thread of threadMap.values()) {
       const fullText = thread.canonicalText.map((r) => r.text).join('');
-      if (charsRemaining <= 0) break;
-
-      const displayText = fullText.slice(0, charsRemaining);
-      texts.push({ threadId: thread.id, text: displayText, runs: thread.canonicalText });
-      charsRemaining -= displayText.length;
+      texts.push({ threadId: thread.id, text: fullText, runs: thread.canonicalText });
     }
 
     const colGap = sortedZones.length > 1
@@ -117,43 +100,18 @@ export default function FlowGroupContainer({
       letterSpacing: `${primaryZone.style.letterSpacing}px`,
       color: primaryZone.style.color,
       textAlign: primaryZone.style.textAlign as React.CSSProperties['textAlign'],
+      textAlignLast: primaryZone.style.textAlign === 'justify' ? 'left' as const : undefined,
+      textJustify: primaryZone.style.textAlign === 'justify' ? 'inter-character' as const : undefined,
+      textRendering: 'optimizeLegibility' as const,
+      fontKerning: 'normal' as const,
+      whiteSpace: 'pre-wrap' as const,
+      wordBreak: 'break-word' as const,
+      overflowWrap: 'anywhere' as const,
+      hyphens: 'auto' as const,
     };
 
     return { containerStyle, displayTexts: texts };
-  }, [zonesInGroup, page, document, maxChars]);
-
-  useEffect(() => {
-    const container = containerRef.current;
-    if (!container || !onOverflow || overflowHandled) return;
-
-    const check = () => {
-      requestAnimationFrame(() => {
-        if (!container) return;
-        if (container.scrollHeight > container.clientHeight + 1) {
-          const cutPoint = findOverflowCutPoint(container, container.clientHeight - 1);
-          if (cutPoint > 0 && cutPoint < Infinity) {
-            let charCount = 0;
-            for (const dt of displayTexts) {
-              if (charCount + dt.text.length > cutPoint) {
-                const overflowOffset = cutPoint - charCount;
-                const overflowText = dt.text.slice(overflowOffset);
-                onOverflow(dt.threadId, overflowText, cutPoint);
-                setOverflowHandled(true);
-                return;
-              }
-              charCount += dt.text.length;
-            }
-          }
-        }
-      });
-    };
-
-    if (globalThis.document?.fonts?.ready) {
-      globalThis.document.fonts.ready.then(check);
-    } else {
-      check();
-    }
-  }, [displayTexts, onOverflow, overflowHandled]);
+  }, [zonesInGroup, page, document]);
 
   if (!zonesInGroup.length) {
     return null;
@@ -163,12 +121,12 @@ export default function FlowGroupContainer({
 
   return (
     <div
-      ref={containerRef}
       key={`flowgroup-${flowGroupId}-${page.id}`}
       className={`absolute ${showContentBounds ? 'editor-guide border border-dashed border-blue-300' : ''} ${className}`}
       style={{
         ...containerStyle,
-        overflow: 'hidden',
+        overflow: shouldAllowVisibleOverflow(zonesInGroup[0]) ? 'visible' : 'hidden',
+        zIndex: getFlowGroupZIndex(zonesInGroup[0]),
       }}
     >
       {displayTexts.map((dt) => (

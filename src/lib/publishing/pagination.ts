@@ -125,7 +125,7 @@ const resolveThreadPageForOffset = (
   return page;
 };
 
-export const repaginateDocument = (document: PublishingDocument, _threadIds: string[]) => {
+export const repaginateDocument = (document: PublishingDocument) => {
   // CSS columns mode - pagination handled by FlowGroupContainer
   // CSS columns 방식에서는 브라우저가 텍스트 플로우를 처리하므로
   // 미리 텍스트를 분할할 필요 없음

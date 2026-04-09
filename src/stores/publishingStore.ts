@@ -1,9 +1,21 @@
 import { create } from 'zustand';
-import { createImageZone, createInitialPublishingDocument, createMainBodyZone, getThreadPlainText } from '@/lib/publishing/defaultDocument';
-import { applyThreadPaginationSegments, PaginationSegmentPlacement, repaginateDocument } from '@/lib/publishing/pagination';
+import {
+  findThreadForContributionSlot,
+  findZoneForContributionSlot,
+  getChainRootPageId,
+  getFlowStartZoneId,
+  inferZoneSlotKey,
+  normalizeContributionOrder,
+  rebuildContributionLayout,
+  sortFlowZonesForReadingOrder,
+} from '@/lib/publishing/contributionLayout';
+import { DEFAULT_PRESENTATION_TRACKS, createImageZone, createInitialPublishingDocument, createMainBodyZone, createSpeakerThreadZones, getThreadPlainText } from '@/lib/publishing/defaultDocument';
 import { applyPresetToMaster, TemplatePresetKey } from '@/lib/publishing/templatePresets';
 import {
+  ContributionItem,
+  ContributionSlotContent,
   HistoryEntry,
+  PresentationTrackOption,
   PublishingDocument,
   PublishingEditorState,
   TextRole,
@@ -22,9 +34,14 @@ interface PublishingStore extends PublishingEditorState {
   deleteMaster: (masterId: string) => void;
   setDefaultMaster: (masterId: string) => void;
   renameMaster: (masterId: string, name: string) => void;
+  setMasterPresentationTracksUsage: (masterId: string, enabled: boolean) => void;
+  resetSpeakerThreadMaster: (masterId: string) => void;
   updatePageMaster: (pageId: string, masterId: string) => void;
   applyTemplatePreset: (masterId: string, preset: TemplatePresetKey) => void;
   updateDocumentMeta: (titleKo: string, titleEn?: string) => void;
+  addPresentationTrack: (kind?: PresentationTrackOption['kind']) => void;
+  updatePresentationTrack: (trackId: string, updates: Partial<PresentationTrackOption>) => void;
+  deletePresentationTrack: (trackId: string) => void;
   updatePageNumbering: (updates: Partial<PublishingDocument['layout']['pageNumbering']>) => void;
   updatePrintGuides: (updates: Partial<PublishingDocument['layout']['printGuides']>) => void;
   updateMasterBackground: (masterId: string, fill: string) => void;
@@ -39,6 +56,7 @@ interface PublishingStore extends PublishingEditorState {
       height: number;
       text: string;
       fill: string;
+      shape: 'rect' | 'line' | 'ellipse';
       style: Partial<TypographyStyle>;
     }>,
   ) => void;
@@ -52,6 +70,7 @@ interface PublishingStore extends PublishingEditorState {
       height: number;
       text: string;
       fill: string;
+      shape: 'rect' | 'line' | 'ellipse';
       style: Partial<TypographyStyle>;
     }>,
   ) => void;
@@ -109,7 +128,22 @@ interface PublishingStore extends PublishingEditorState {
   deleteThread: (threadId: string) => void;
   addThread: (pageId: string, zoneId: string, role?: TextRole) => void;
   addThreadWithText: (pageId: string, zoneId: string, text: string, role?: TextRole) => string | null;
-  addThreadsFromParsedContent: (pageId: string, threads: Array<{ text: string; role: TextRole }>) => string[];
+  addContribution: (
+    pageId: string,
+    contribution: {
+      sourceFileName?: string;
+      track: string;
+      title: string;
+      slots: ContributionSlotContent[];
+    },
+    masterId?: string,
+  ) => string | null;
+  createSpeakerContribution: (pageId: string, masterId?: string) => string | null;
+  updateContributionSlotText: (contributionId: string, slotKey: string, text: string) => void;
+  updateContributionPresentationTrack: (contributionId: string, trackId: string) => void;
+  updateContributionStatus: (contributionId: string, status: 'draft' | 'completed') => void;
+  moveContribution: (contributionId: string, direction: 'up' | 'down') => void;
+  deleteContribution: (contributionId: string) => void;
   addImageBlock: (
     pageId: string,
     zoneId: string,
@@ -142,9 +176,6 @@ interface PublishingStore extends PublishingEditorState {
     }>,
   ) => void;
   toggleBlockLock: (pageId: string, zoneId: string, blockId: string) => void;
-  applyPaginationResult: (threadId: string, segments: PaginationSegmentPlacement[]) => void;
-  repaginateInvalidatedThreads: () => void;
-  handleThreadOverflow: (threadId: string, overflowText: string, overflowStartOffset: number) => void;
   markSaving: () => void;
   markSaved: () => void;
   markSaveFailed: (message: string) => void;
@@ -159,32 +190,6 @@ let autosaveTimer: number | null = null;
 const clone = <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
 const createId = (prefix: string) => `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-const FLOW_ROW_THRESHOLD_PX = 24;
-
-const sortFlowZonesForReadingOrder = <T extends { frame: { x: number; y: number } }>(zones: T[]) =>
-  [...zones].sort((left, right) => {
-    if (Math.abs(left.frame.y - right.frame.y) > FLOW_ROW_THRESHOLD_PX) {
-      return left.frame.y - right.frame.y;
-    }
-    return left.frame.x - right.frame.x;
-  });
-
-const inferZoneSlotKey = (zone?: { id: string; name?: string; kind?: string; slotKey?: string }) => {
-  if (!zone) {
-    return undefined;
-  }
-
-  if (zone.slotKey?.trim()) {
-    return zone.slotKey.trim();
-  }
-
-  const target = `${zone.id} ${zone.name ?? ''}`.toLowerCase();
-  if (target.includes('image')) return 'image';
-  if (target.includes('cover') || target.includes('title')) return 'title';
-  if (target.includes('section') && target.includes('header')) return 'section_title';
-  if (target.includes('intro') || target.includes('summary')) return 'summary';
-  return zone.kind === 'text-flow' ? 'body' : undefined;
-};
 
 const normalizeMasterFlowGroups = (master: PublishingDocument['masters']['items'][number]) => {
   const flowGroups = new Map<string, PublishingDocument['masters']['items'][number]['contentZones']>();
@@ -237,6 +242,117 @@ const normalizeMasterFlowGroups = (master: PublishingDocument['masters']['items'
   });
 };
 
+const buildContributionSlotsForMaster = (
+  master: PublishingDocument['masters']['items'][number],
+  slots: ContributionSlotContent[],
+) => {
+  const normalizedInput = slots.map((slot) => ({
+    ...slot,
+    text: normalizeContributionSlotText(slot.slotKey, slot.text),
+  }));
+
+  if (master.mode !== 'speaker-thread' || !master.slotSchema?.length) {
+    return normalizedInput.filter((slot) => slot.text.trim());
+  }
+
+  const slotsByKey = new Map(normalizedInput.map((slot) => [slot.slotKey, slot]));
+  const mapped: ContributionSlotContent[] = master.slotSchema.map((definition) => {
+    const existing = slotsByKey.get(definition.slotKey);
+    if (existing) {
+      return {
+        ...existing,
+        label: existing.label || definition.label,
+        role: existing.role || definition.role,
+        language: existing.language ?? definition.language,
+      };
+    }
+    return {
+      slotKey: definition.slotKey,
+      label: definition.label,
+      role: definition.role,
+      text: '',
+      language: definition.language,
+    } satisfies ContributionSlotContent;
+  });
+
+  normalizedInput.forEach((slot) => {
+    if (!master.slotSchema?.some((definition) => definition.slotKey === slot.slotKey) && slot.text.trim()) {
+      mapped.push({
+        slotKey: slot.slotKey,
+        label: slot.label,
+        role: slot.role,
+        text: slot.text,
+        language: slot.language,
+      });
+    }
+  });
+
+  return mapped;
+};
+
+const normalizeTrackText = (value?: string) => value?.trim().replace(/\s+/g, ' ').toLowerCase() ?? '';
+
+const inferPresentationTrackId = (
+  tracks: PresentationTrackOption[],
+  trackText?: string,
+  titleText?: string,
+) => {
+  const normalizedTrack = normalizeTrackText(trackText);
+  const normalizedTitle = normalizeTrackText(titleText);
+  if (!normalizedTrack && !normalizedTitle) {
+    return undefined;
+  }
+
+  const exactPrefixMatch = tracks.find((item) => normalizedTrack.startsWith(item.prefix.toLowerCase()));
+  if (exactPrefixMatch) {
+    return exactPrefixMatch.id;
+  }
+
+  const exactHintMatch = tracks.find((item) =>
+    [item.label, ...(item.glmHints ?? [])].some((hint) => {
+      const normalizedHint = normalizeTrackText(hint);
+      return normalizedTrack.includes(normalizedHint) || normalizedTitle.includes(normalizedHint);
+    }),
+  );
+  return exactHintMatch?.id;
+};
+
+const renumberContributionPresentationCodes = (document: PublishingDocument) => {
+  const tracks = document.meta.presentationTracks?.length ? document.meta.presentationTracks : DEFAULT_PRESENTATION_TRACKS;
+  const counters = new Map<string, number>();
+
+  normalizeContributionOrder(document);
+  document.contributions.forEach((contribution) => {
+    const master = document.masters.items.find((item) => item.id === contribution.masterId);
+    if (!master?.usesPresentationTracks) {
+      contribution.presentationTrackId = undefined;
+      contribution.presentationCode = undefined;
+      return;
+    }
+
+    const trackId =
+      contribution.presentationTrackId
+      ?? inferPresentationTrackId(tracks, contribution.track, contribution.title);
+    if (!trackId) {
+      contribution.presentationTrackId = undefined;
+      contribution.presentationCode = undefined;
+      return;
+    }
+
+    const track = tracks.find((item) => item.id === trackId);
+    if (!track) {
+      contribution.presentationTrackId = undefined;
+      contribution.presentationCode = undefined;
+      return;
+    }
+
+    const nextIndex = (counters.get(track.id) ?? 0) + 1;
+    counters.set(track.id, nextIndex);
+    contribution.presentationTrackId = track.id;
+    contribution.presentationCode = `${track.prefix}-${String(nextIndex).padStart(2, '0')}`;
+  });
+};
+
 const getPrimaryFlowZoneId = (document: PublishingDocument, masterId: string) => {
   const master = document.masters.items.find((item) => item.id === masterId);
   return (
@@ -248,35 +364,20 @@ const getPrimaryFlowZoneId = (document: PublishingDocument, masterId: string) =>
   );
 };
 
-const getChainRootPageId = (document: PublishingDocument, pageId: string) => {
-  let currentPage = document.pages.find((page) => page.id === pageId);
-  while (currentPage?.derivedFrom?.reason === 'auto-pagination') {
-    const previousPage = document.pages.find((page) => page.id === currentPage?.derivedFrom?.previousPageId);
-    if (!previousPage) {
-      break;
-    }
-    currentPage = previousPage;
-  }
-  return currentPage?.id ?? pageId;
-};
-
-const getFlowStartZoneId = (document: PublishingDocument, masterId: string, zoneId: string) => {
-  const master = document.masters.items.find((item) => item.id === masterId);
-  const zone = master?.contentZones.find((item) => item.id === zoneId);
-  if (!master || !zone) {
-    return zoneId;
+const canReuseContributionPage = (document: PublishingDocument, pageId: string) => {
+  const page = document.pages.find((item) => item.id === pageId);
+  if (!page) {
+    return false;
   }
 
-  if (!zone.flowGroupId) {
-    return zone.id;
+  const rootPageId = getChainRootPageId(document, pageId);
+  if ((document.contributions ?? []).some((item) => item.pageId === rootPageId)) {
+    return false;
   }
 
-  return (
-    sortFlowZonesForReadingOrder(
-      master.contentZones.filter((item) => item.kind === 'text-flow' && item.flowGroupId === zone.flowGroupId && item.allowThreadContinuation !== false),
-    )[0]?.id
-    ?? zone.id
-  );
+  const hasThreads = document.threads.some((thread) => thread.sourcePageId === rootPageId);
+  const hasBlocks = page.zones.some((zone) => zone.blocks.length > 0);
+  return !hasThreads && !hasBlocks;
 };
 
 const getThreadSlotKey = (document: PublishingDocument, thread: PublishingDocument['threads'][number]) => {
@@ -342,6 +443,28 @@ const findExistingThreadForSlot = (
   }) ?? null;
 };
 
+const createPageFromMaster = (
+  document: PublishingDocument,
+  masterId: string,
+  pageNumber: number,
+): PublishingDocument['pages'][number] | null => {
+  const master = document.masters.items.find((item) => item.id === masterId);
+  if (!master) {
+    return null;
+  }
+
+  return {
+    id: createId('page'),
+    pageNumber,
+    masterId,
+    pageRole: 'body',
+    zones: master.contentZones.map((zone) => ({
+      zoneId: zone.id,
+      blocks: [],
+    })),
+  };
+};
+
 const renameZoneForMaster = (zone: PublishingDocument['masters']['items'][number]['contentZones'][number]) => ({
   ...zone,
   id: createId(zone.id || 'zone'),
@@ -350,15 +473,15 @@ const renameZoneForMaster = (zone: PublishingDocument['masters']['items'][number
 const getRoleStyleOverride = (role: TextRole) => {
   switch (role) {
     case 'title':
-      return { fontSize: 30, fontWeight: 700, lineHeight: 1.4, textAlign: 'center' as const };
+      return { fontSize: 30, fontWeight: 700, lineHeight: 1.4 };
     case 'heading':
-      return { fontSize: 24, fontWeight: 700, lineHeight: 1.45, textAlign: 'left' as const };
+      return { fontSize: 24, fontWeight: 700, lineHeight: 1.45 };
     case 'subheading':
-      return { fontSize: 18, fontWeight: 700, lineHeight: 1.5, textAlign: 'left' as const };
+      return { fontSize: 18, fontWeight: 700, lineHeight: 1.5 };
     case 'quote':
-      return { fontSize: 16, fontWeight: 400, lineHeight: 1.9, textAlign: 'left' as const };
+      return { fontSize: 16, fontWeight: 400, lineHeight: 1.9 };
     case 'caption':
-      return { fontSize: 12, fontWeight: 400, lineHeight: 1.6, textAlign: 'center' as const };
+      return { fontSize: 12, fontWeight: 400, lineHeight: 1.6 };
     default:
       return undefined;
   }
@@ -405,6 +528,35 @@ const mergeRuns = (runs: TextRun[]) => {
     merged.push({ text: run.text, marks: run.marks ? { ...run.marks } : undefined });
   });
   return merged;
+};
+
+const SUPERSCRIPT_DIGIT_MAP: Record<string, string> = {
+  '0': '⁰',
+  '1': '¹',
+  '2': '²',
+  '3': '³',
+  '4': '⁴',
+  '5': '⁵',
+  '6': '⁶',
+  '7': '⁷',
+  '8': '⁸',
+  '9': '⁹',
+};
+
+const AUTHOR_MARKER_PATTERN = /(\d+(?:[,-]\d+)*)\)/g;
+const SUPERSCRIPT_CLOSE_PAREN = '⁾';
+
+const normalizeContributionSlotText = (slotKey: string, text: string) => {
+  const trimmed = text.trim();
+  if (!/^authors(_ko|_en)?$/.test(slotKey)) {
+    return trimmed;
+  }
+
+  return trimmed
+    .replace(AUTHOR_MARKER_PATTERN, (_match, marker: string) =>
+      `${marker.replace(/\d/g, (digit) => SUPERSCRIPT_DIGIT_MAP[digit] ?? digit)}${SUPERSCRIPT_CLOSE_PAREN}`,
+    )
+    .replace(/\d/g, (digit) => SUPERSCRIPT_DIGIT_MAP[digit] ?? digit);
 };
 
 const trimThreadFromPage = (document: PublishingDocument, threadId: string, pageId: string) => {
@@ -491,6 +643,115 @@ const syncTocFromThreads = (document: PublishingDocument) => {
   });
 };
 
+const sanitizeSpeakerThreadMaster = (master: PublishingDocument['masters']['items'][number]) => {
+  if (master.mode !== 'speaker-thread' || !master.slotSchema?.length) {
+    return master;
+  }
+
+  if (master.usesPresentationTracks === undefined) {
+    master.usesPresentationTracks = true;
+  }
+
+  const allowedSlotKeys = new Set(master.slotSchema.map((slot) => slot.slotKey));
+  master.contentZones = master.contentZones.filter((zone) => {
+    if (zone.kind !== 'text-flow') {
+      return true;
+    }
+
+    const inferredSlotKey = inferZoneSlotKey(zone);
+    const slotKey = zone.slotKey?.trim() || inferredSlotKey;
+    if (!slotKey || !allowedSlotKeys.has(slotKey)) {
+      return false;
+    }
+
+    zone.slotKey = slotKey;
+    return true;
+  });
+
+  if (!master.decorations.some((decoration) => decoration.textBinding === 'presentation.code')) {
+    master.decorations.unshift({
+      id: 'speaker_thread_presentation_code',
+      type: 'text',
+      locked: false,
+      scope: 'template-fixed',
+      x: 642,
+      y: 82,
+      width: 80,
+      height: 24,
+      textBinding: 'presentation.code',
+      style: {
+        fontFamily: 'NanumSquareBold',
+        fontSize: 10,
+        fontWeight: 700,
+        lineHeight: 1.2,
+        letterSpacing: 0,
+        textAlign: 'right',
+        color: '#334155',
+      },
+    });
+  }
+
+  master.contentZones.forEach((zone) => {
+    if (zone.id === 'speaker_track') {
+      zone.frame = { ...zone.frame, x: 72, y: 82, width: 650, height: 26 };
+    }
+    if (zone.id === 'speaker_title_ko' || zone.id === 'speaker_title_en') {
+      zone.frame = { ...zone.frame, x: 72, y: 126, width: 650, height: 78 };
+    }
+    if (zone.id === 'speaker_authors_ko' || zone.id === 'speaker_authors_en') {
+      zone.frame = { ...zone.frame, x: 72, y: 218, width: 650, height: 28 };
+    }
+    if (zone.id === 'speaker_affiliation_ko' || zone.id === 'speaker_affiliation_en') {
+      zone.frame = { ...zone.frame, x: 72, y: 256, width: 650, height: 28 };
+    }
+    if (zone.id === 'speaker_body_ko' || zone.id === 'speaker_body_en') {
+      zone.frame = { ...zone.frame, x: 72, y: 328, width: 650, height: 668 };
+    }
+  });
+
+  master.decorations = master.decorations.map((decoration) => {
+    if (decoration.id === 'speaker_thread_presentation_code') {
+      return {
+        ...decoration,
+        style: {
+          fontFamily: 'NanumSquareBold',
+          fontSize: 10,
+          fontWeight: 700,
+          lineHeight: 1.2,
+          letterSpacing: 0,
+          textAlign: 'right',
+          color: '#334155',
+          ...(decoration.style ?? {}),
+        },
+      };
+    }
+
+    if (decoration.id === 'speaker_thread_page_number') {
+      return {
+        ...decoration,
+        x: 670,
+        y: 1072,
+        width: 50,
+        height: 20,
+        style: {
+          fontFamily: 'NanumSquareBold',
+          fontSize: 10,
+          fontWeight: 700,
+          lineHeight: 1.2,
+          letterSpacing: 0,
+          textAlign: 'right',
+          color: '#334155',
+          ...(decoration.style ?? {}),
+        },
+      };
+    }
+
+    return decoration;
+  });
+
+  return master;
+};
+
 const sanitizePublishingDocument = (document: PublishingDocument): PublishingDocument => {
   const nextDocument = clone(document);
 
@@ -500,7 +761,29 @@ const sanitizePublishingDocument = (document: PublishingDocument): PublishingDoc
       ...master,
       decorations: (master.decorations ?? []).filter((decoration) => Boolean(decoration)),
       contentZones: (master.contentZones ?? []).filter((zone) => Boolean(zone?.id) && Boolean(zone?.frame)),
-    }));
+    }))
+    .map((master) => sanitizeSpeakerThreadMaster(master));
+
+  nextDocument.masters.items.forEach((master) => {
+    master.decorations = master.decorations.map((decoration) => {
+      if (decoration.type !== 'image' || decoration.src) {
+        return decoration;
+      }
+
+      const linkedAsset = nextDocument.assets.find((asset) => asset.id === decoration.assetId);
+      if (!linkedAsset) {
+        return decoration;
+      }
+
+      return {
+        ...decoration,
+        src: linkedAsset.src,
+        storagePath: linkedAsset.storagePath,
+        naturalWidth: linkedAsset.naturalWidth,
+        naturalHeight: linkedAsset.naturalHeight,
+      };
+    });
+  });
 
   nextDocument.masters.items.forEach((master) => {
     normalizeMasterFlowGroups(master);
@@ -561,6 +844,10 @@ const sanitizePublishingDocument = (document: PublishingDocument): PublishingDoc
         sourceZoneId: normalizedSourceZoneId,
         zoneSequence: [{ pageId: rootPageId, zoneId: normalizedSourceZoneId }],
       };
+    })
+    .filter((thread) => {
+      const sourcePage = nextDocument.pages.find((page) => page.id === thread.sourcePageId);
+      return sourcePage?.zones.some((zone) => zone.zoneId === thread.sourceZoneId) ?? false;
     });
 
   nextDocument.threads.forEach((thread) => {
@@ -593,6 +880,17 @@ const sanitizePublishingDocument = (document: PublishingDocument): PublishingDoc
     }
   });
   nextDocument.threads = Array.from(mergedThreads.values());
+  nextDocument.contributions = (nextDocument.contributions ?? [])
+    .filter((contribution) => Boolean(contribution))
+    .map((contribution, index) => ({
+      ...contribution,
+      order: contribution.order ?? index + 1,
+      slots: (contribution.slots ?? []).filter((slot) => Boolean(slot?.slotKey)),
+    }));
+  nextDocument.meta.presentationTracks = nextDocument.meta.presentationTracks?.length
+    ? nextDocument.meta.presentationTracks
+    : DEFAULT_PRESENTATION_TRACKS;
+  renumberContributionPresentationCodes(nextDocument);
   nextDocument.assets = (nextDocument.assets ?? []).filter((asset) => Boolean(asset));
   nextDocument.toc.items = (nextDocument.toc.items ?? []).filter((item) => Boolean(item));
 
@@ -660,7 +958,7 @@ const createStoreState = (document?: PublishingDocument): PublishingEditorState 
   },
 });
 
-export const usePublishingStore = create<PublishingStore>()((set) => ({
+export const usePublishingStore = create<PublishingStore>()((set, get) => ({
   ...createStoreState(),
 
   initialize: (document) =>
@@ -758,21 +1056,25 @@ export const usePublishingStore = create<PublishingStore>()((set) => ({
           }
         });
 
-        const repaginated = repaginateDocument(
-          nextDocument,
-          nextDocument.threads.map((thread) => thread.id),
-        );
-        syncTocFromThreads(repaginated);
-        repaginated.meta.updatedAt = new Date().toISOString();
+        nextDocument.pages.splice(pageIndex, 1);
+        nextDocument.pages = nextDocument.pages.map((item, index) => ({
+          ...item,
+          pageNumber: index + 1,
+        }));
+        nextDocument.threads.forEach((thread) => {
+          thread.zoneSequence = thread.zoneSequence.filter((item) => item.pageId !== pageId);
+        });
+        syncTocFromThreads(nextDocument);
+        nextDocument.meta.updatedAt = new Date().toISOString();
         const fallbackPage =
-          repaginated.pages
+          nextDocument.pages
             .filter((candidate) => candidate.pageNumber < page.pageNumber)
             .at(-1)
-          ?? repaginated.pages[0];
-        const next = pushHistoryEntry(state, `Trim overflow page ${pageId}`, repaginated);
+          ?? nextDocument.pages[0];
+        const next = pushHistoryEntry(state, `Trim overflow page ${pageId}`, nextDocument);
 
         return {
-          document: repaginated,
+          document: nextDocument,
           selection: {
             pageId: fallbackPage?.id ?? null,
             zoneId: fallbackPage?.zones[0]?.zoneId ?? null,
@@ -881,6 +1183,65 @@ export const usePublishingStore = create<PublishingStore>()((set) => ({
       const next = pushHistoryEntry(state, `Rename master ${masterId}`, nextDocument);
       return {
         document: nextDocument,
+        ...next,
+      };
+    }),
+
+  setMasterPresentationTracksUsage: (masterId, enabled) =>
+    set((state) => {
+      const nextDocument = clone(state.document);
+      const master = nextDocument.masters.items.find((item) => item.id === masterId);
+      if (!master || master.mode !== 'speaker-thread') {
+        return state;
+      }
+
+      master.usesPresentationTracks = enabled;
+      renumberContributionPresentationCodes(nextDocument);
+      nextDocument.meta.updatedAt = new Date().toISOString();
+      const next = pushHistoryEntry(state, `Set master presentation tracks ${masterId}`, nextDocument);
+      return {
+        document: nextDocument,
+        ...next,
+      };
+    }),
+
+  resetSpeakerThreadMaster: (masterId) =>
+    set((state) => {
+      const nextDocument = clone(state.document);
+      const master = nextDocument.masters.items.find((item) => item.id === masterId);
+      if (!master || master.mode !== 'speaker-thread') {
+        return state;
+      }
+
+      master.contentZones = createSpeakerThreadZones();
+      normalizeMasterFlowGroups(master);
+
+      nextDocument.pages.forEach((page) => {
+        if (page.masterId !== masterId) {
+          return;
+        }
+
+        page.zones = master.contentZones.map((zone) => ({
+          zoneId: zone.id,
+          blocks: [],
+        }));
+      });
+
+      (nextDocument.contributions ?? [])
+        .filter((contribution) => contribution.masterId === masterId)
+        .forEach((contribution) => {
+          rebuildContributionLayout(nextDocument, contribution, createPageFromMaster);
+        });
+
+      nextDocument.meta.updatedAt = new Date().toISOString();
+      syncTocFromThreads(nextDocument);
+      const next = pushHistoryEntry(state, `Reset speaker thread master ${masterId}`, nextDocument);
+      return {
+        document: nextDocument,
+        pagination: {
+          ...state.pagination,
+          invalidatedThreadIds: Array.from(new Set([...state.pagination.invalidatedThreadIds, ...nextDocument.threads.map((thread) => thread.id)])),
+        },
         ...next,
       };
     }),
@@ -1116,6 +1477,83 @@ export const usePublishingStore = create<PublishingStore>()((set) => ({
       };
     }),
 
+  addPresentationTrack: (kind = 'oral') =>
+    set((state) => {
+      const nextDocument = clone(state.document);
+      const tracks = nextDocument.meta.presentationTracks?.length
+        ? [...nextDocument.meta.presentationTracks]
+        : [...DEFAULT_PRESENTATION_TRACKS];
+      const sameKindCount = tracks.filter((item) => item.kind === kind).length + 1;
+      tracks.push({
+        id: createId(`presentation-track-${kind}`),
+        kind,
+        prefix: `${kind === 'oral' ? 'O' : 'P'}${sameKindCount}`,
+        label: '새 트랙',
+        glmHints: [],
+      });
+      nextDocument.meta.presentationTracks = tracks;
+      renumberContributionPresentationCodes(nextDocument);
+      nextDocument.meta.updatedAt = new Date().toISOString();
+      const next = pushHistoryEntry(state, 'Add presentation track', nextDocument);
+      return {
+        document: nextDocument,
+        ...next,
+      };
+    }),
+
+  updatePresentationTrack: (trackId, updates) =>
+    set((state) => {
+      const nextDocument = clone(state.document);
+      const tracks = nextDocument.meta.presentationTracks?.length
+        ? [...nextDocument.meta.presentationTracks]
+        : [...DEFAULT_PRESENTATION_TRACKS];
+      const track = tracks.find((item) => item.id === trackId);
+      if (!track) {
+        return state;
+      }
+      Object.assign(track, updates);
+      nextDocument.meta.presentationTracks = tracks.map((item) => ({
+        ...item,
+        prefix: item.prefix.trim(),
+        label: item.label.trim(),
+        glmHints: (item.glmHints ?? []).map((hint) => hint.trim()).filter(Boolean),
+      }));
+      renumberContributionPresentationCodes(nextDocument);
+      nextDocument.meta.updatedAt = new Date().toISOString();
+      const next = pushHistoryEntry(state, `Update presentation track ${trackId}`, nextDocument);
+      return {
+        document: nextDocument,
+        ...next,
+      };
+    }),
+
+  deletePresentationTrack: (trackId) =>
+    set((state) => {
+      const nextDocument = clone(state.document);
+      const tracks = nextDocument.meta.presentationTracks?.length
+        ? [...nextDocument.meta.presentationTracks]
+        : [...DEFAULT_PRESENTATION_TRACKS];
+      if (!tracks.some((item) => item.id === trackId)) {
+        return state;
+      }
+      nextDocument.meta.presentationTracks = tracks.filter((item) => item.id !== trackId);
+      nextDocument.contributions.forEach((contribution) => {
+        if (contribution.presentationTrackId === trackId) {
+          contribution.presentationTrackId = undefined;
+          contribution.presentationCode = undefined;
+          contribution.status = 'draft';
+          contribution.updatedAt = new Date().toISOString();
+        }
+      });
+      renumberContributionPresentationCodes(nextDocument);
+      nextDocument.meta.updatedAt = new Date().toISOString();
+      const next = pushHistoryEntry(state, `Delete presentation track ${trackId}`, nextDocument);
+      return {
+        document: nextDocument,
+        ...next,
+      };
+    }),
+
   updatePageNumbering: (updates) =>
     set((state) => {
       const nextDocument = clone(state.document);
@@ -1338,7 +1776,13 @@ export const usePublishingStore = create<PublishingStore>()((set) => ({
         zone.name = updates.name.trim();
       }
       if ('slotKey' in updates) {
-        zone.slotKey = updates.slotKey?.trim() || undefined;
+        const nextSlotKey = updates.slotKey?.trim() || undefined;
+        if (master.mode === 'speaker-thread' && master.slotSchema?.length) {
+          const allowedSlotKeys = new Set(master.slotSchema.map((slot) => slot.slotKey));
+          zone.slotKey = nextSlotKey && allowedSlotKeys.has(nextSlotKey) ? nextSlotKey : zone.slotKey;
+        } else {
+          zone.slotKey = nextSlotKey;
+        }
       }
       if ('flowGroupId' in updates) {
         zone.flowGroupId = updates.flowGroupId?.trim() || undefined;
@@ -1393,7 +1837,7 @@ export const usePublishingStore = create<PublishingStore>()((set) => ({
     set((state) => {
       const nextDocument = clone(state.document);
       const master = nextDocument.masters.items.find((item) => item.id === masterId);
-      if (!master || master.locked) {
+      if (!master) {
         return state;
       }
 
@@ -1420,7 +1864,7 @@ export const usePublishingStore = create<PublishingStore>()((set) => ({
     set((state) => {
       const nextDocument = clone(state.document);
       const master = nextDocument.masters.items.find((item) => item.id === masterId);
-      if (!master || master.locked) {
+      if (!master) {
         return state;
       }
 
@@ -1448,19 +1892,15 @@ export const usePublishingStore = create<PublishingStore>()((set) => ({
     set((state) => {
       const nextDocument = clone(state.document);
       const master = nextDocument.masters.items.find((item) => item.id === masterId);
-      if (!master || master.locked) {
+      if (!master) {
         return state;
       }
 
-      const assetId = `asset_${Date.now()}`;
-      nextDocument.assets.push({
-        id: assetId,
-        type: 'image',
-        src: image.src,
-        storagePath: image.storagePath,
-        naturalWidth: image.naturalWidth,
-        naturalHeight: image.naturalHeight,
-      });
+      const baseWidth = 180;
+      const aspectRatio = image.naturalWidth > 0 && image.naturalHeight > 0
+        ? image.naturalHeight / image.naturalWidth
+        : 0.4;
+      const baseHeight = Math.max(48, Math.round(baseWidth * aspectRatio));
 
       master.decorations.push({
         id: `decoration_${Date.now()}`,
@@ -1469,9 +1909,12 @@ export const usePublishingStore = create<PublishingStore>()((set) => ({
         scope: 'template-fixed',
         x: 72,
         y: 40,
-        width: 120,
-        height: 48,
-        assetId,
+        width: baseWidth,
+        height: baseHeight,
+        src: image.src,
+        storagePath: image.storagePath,
+        naturalWidth: image.naturalWidth,
+        naturalHeight: image.naturalHeight,
       });
       nextDocument.meta.updatedAt = new Date().toISOString();
       const next = pushHistoryEntry(state, `Add master image decoration ${masterId}`, nextDocument);
@@ -1539,7 +1982,7 @@ export const usePublishingStore = create<PublishingStore>()((set) => ({
     set((state) => {
       const nextDocument = clone(state.document);
       const master = nextDocument.masters.items.find((item) => item.id === masterId);
-      if (!master || master.locked) {
+      if (!master || master.locked || master.mode === 'speaker-thread') {
         return state;
       }
 
@@ -1790,26 +2233,63 @@ export const usePublishingStore = create<PublishingStore>()((set) => ({
         return state;
       }
 
-      nextDocument.threads = nextDocument.threads.filter((item) => item.id !== threadId);
-      const repaginated = repaginateDocument(nextDocument, nextDocument.threads.map((thread) => thread.id));
-      syncTocFromThreads(repaginated);
-      repaginated.meta.updatedAt = new Date().toISOString();
-      const next = pushHistoryEntry(state, `Delete thread ${threadId}`, repaginated);
-
-      return {
-        document: repaginated,
-        selection:
-          state.selection.blockId && state.document.pages.some((page) =>
+      const selectedBlockBelongsToThread = state.selection.blockId
+        ? state.document.pages.some((page) =>
             page.zones.some((zone) =>
               zone.blocks.some((block) => block.id === state.selection.blockId && block.type === 'text' && block.flow.sourceThreadId === threadId),
             ),
           )
-            ? {
-                pageId: state.selection.pageId,
-                zoneId: state.selection.zoneId,
-                blockId: null,
-              }
-            : state.selection,
+        : false;
+
+      nextDocument.pages.forEach((page) => {
+        page.zones.forEach((zone) => {
+          zone.blocks = zone.blocks.filter((block) => block.type !== 'text' || block.flow.sourceThreadId !== threadId);
+        });
+      });
+
+      nextDocument.threads = nextDocument.threads.filter((item) => item.id !== threadId);
+
+      nextDocument.pages = nextDocument.pages
+        .filter((page) => {
+          if (page.pageRole === 'cover') {
+            return true;
+          }
+
+          if (page.derivedFrom?.reason !== 'auto-pagination') {
+            return true;
+          }
+
+          return page.zones.some((zone) => zone.blocks.length > 0);
+        })
+        .map((page, index) => ({
+          ...page,
+          pageNumber: index + 1,
+        }));
+
+      syncTocFromThreads(nextDocument);
+      nextDocument.meta.updatedAt = new Date().toISOString();
+      const next = pushHistoryEntry(state, `Delete thread ${threadId}`, nextDocument);
+
+      const fallbackPageId = state.selection.pageId && nextDocument.pages.some((page) => page.id === state.selection.pageId)
+        ? state.selection.pageId
+        : nextDocument.pages[0]?.id ?? null;
+      const fallbackPage = fallbackPageId
+        ? nextDocument.pages.find((page) => page.id === fallbackPageId) ?? null
+        : null;
+
+      return {
+        document: nextDocument,
+        selection: selectedBlockBelongsToThread
+          ? {
+              pageId: fallbackPage?.id ?? null,
+              zoneId: fallbackPage?.zones[0]?.zoneId ?? null,
+              blockId: null,
+            }
+          : state.selection,
+        pagination: {
+          ...state.pagination,
+          invalidatedThreadIds: state.pagination.invalidatedThreadIds.filter((id) => id !== threadId),
+        },
         ...next,
       };
     }),
@@ -2131,46 +2611,6 @@ export const usePublishingStore = create<PublishingStore>()((set) => ({
       };
     }),
 
-  applyPaginationResult: (threadId, segments) =>
-    set((state) => {
-      const nextDocument = applyThreadPaginationSegments(state.document, threadId, segments);
-      syncTocFromThreads(nextDocument);
-      nextDocument.meta.updatedAt = new Date().toISOString();
-      const next = pushHistoryEntry(state, `Apply pagination ${threadId}`, nextDocument);
-
-      return {
-        document: nextDocument,
-        pagination: {
-          ...state.pagination,
-          invalidatedThreadIds: state.pagination.invalidatedThreadIds.filter((id) => id !== threadId),
-          lastPaginatedAt: new Date().toISOString(),
-        },
-        ...next,
-      };
-    }),
-
-  repaginateInvalidatedThreads: () =>
-    set((state) => {
-      if (!state.pagination.invalidatedThreadIds.length) {
-        return state;
-      }
-
-      const nextDocument = repaginateDocument(state.document, state.pagination.invalidatedThreadIds);
-      syncTocFromThreads(nextDocument);
-      nextDocument.meta.updatedAt = new Date().toISOString();
-
-      const next = pushHistoryEntry(state, 'Repaginate threads', nextDocument);
-      return {
-        document: nextDocument,
-        pagination: {
-          invalidatedThreadIds: [],
-          isPaginating: false,
-          lastPaginatedAt: new Date().toISOString(),
-        },
-        ...next,
-      };
-    }),
-
   markSaving: () =>
     set((state) => ({
       autosave: {
@@ -2262,67 +2702,113 @@ export const usePublishingStore = create<PublishingStore>()((set) => ({
       };
     }),
 
-  addThreadsFromParsedContent: (pageId, threads) => {
-    const createdThreadIds: string[] = [];
+  addContribution: (pageId, contribution, masterId) => {
+    let createdContributionId: string | null = null;
 
     set((state) => {
       const nextDocument = clone(state.document);
-      const page = nextDocument.pages.find((item) => item.id === pageId);
-      if (!page) {
+      const page = nextDocument.pages.find((item) => item.id === pageId) ?? nextDocument.pages[0];
+      const fallbackMasterId = nextDocument.masters.items.find((item) => item.mode === 'speaker-thread')?.id
+        ?? page?.masterId
+        ?? nextDocument.masters.defaultMasterId;
+      const resolvedMasterId = masterId ?? fallbackMasterId;
+      if (!resolvedMasterId) {
         return state;
       }
 
-      const rootPageId = getChainRootPageId(nextDocument, pageId);
-      const rootPage = nextDocument.pages.find((item) => item.id === rootPageId) ?? page;
-
-      // 현재 페이지의 마스터에서 text-flow 존을 찾기
-      const master = nextDocument.masters.items.find((m) => m.id === rootPage.masterId);
+      const master = nextDocument.masters.items.find((item) => item.id === resolvedMasterId);
       if (!master) {
         return state;
       }
+      nextDocument.contributions = nextDocument.contributions ?? [];
 
-      const textFlowZones = master.contentZones.filter((zone) => zone.kind === 'text-flow');
-      if (!textFlowZones.length) {
+      const rootPageId = getChainRootPageId(nextDocument, page.id);
+      const reusablePage = canReuseContributionPage(nextDocument, rootPageId)
+        ? nextDocument.pages.find((item) => item.id === rootPageId) ?? null
+        : null;
+      const newPage = reusablePage ?? createPageFromMaster(nextDocument, resolvedMasterId, nextDocument.pages.length + 1);
+      if (!newPage) {
         return state;
       }
+      if (!reusablePage) {
+        nextDocument.pages.push(newPage);
+      } else {
+        newPage.masterId = resolvedMasterId;
+        newPage.pageRole = 'body';
+        newPage.derivedFrom = undefined;
+        newPage.zones = master.contentZones.map((zone) => ({
+          zoneId: zone.id,
+          blocks: [],
+        }));
+      }
 
-      // 각 thread에 대해 적절한 zone에 배치
-      let zoneIndex = 0;
+      const contributionId = createId('contribution');
+      createdContributionId = contributionId;
+
+      const normalizedSlots = buildContributionSlotsForMaster(master, contribution.slots);
+      const contributionTitle =
+        normalizedSlots.find((slot) => slot.slotKey === 'title_ko')?.text
+        || normalizedSlots.find((slot) => slot.slotKey === 'title_en')?.text
+        || contribution.title.trim()
+        || `새 발표자 ${nextDocument.contributions.length + 1}`;
+      const contributionTrack = normalizedSlots.find((slot) => slot.slotKey === 'track')?.text || contribution.track;
+      const presentationTrackId = inferPresentationTrackId(
+        nextDocument.meta.presentationTracks?.length ? nextDocument.meta.presentationTracks : DEFAULT_PRESENTATION_TRACKS,
+        contributionTrack,
+        contributionTitle,
+      );
+
+      const contributionRecord: ContributionItem = {
+        id: contributionId,
+        order: nextDocument.contributions.length + 1,
+        masterId: resolvedMasterId,
+        pageId: newPage.id,
+        status: 'draft',
+        title: contributionTitle,
+        track: contributionTrack,
+        presentationTrackId,
+        sourceFileName: contribution.sourceFileName,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        slots: normalizedSlots,
+      };
+
+      nextDocument.contributions.push(contributionRecord);
+      renumberContributionPresentationCodes(nextDocument);
+
       const invalidatedThreadIds: string[] = [];
+      for (const slot of normalizedSlots.filter((item) => item.text.trim())) {
+        const zone = findZoneForContributionSlot(nextDocument, resolvedMasterId, slot.slotKey);
+        if (!zone) {
+          continue;
+        }
 
-      for (const threadData of threads) {
-        const newThreadId = `ai_thread_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-        const newBlockId = `${newThreadId}_seg_000`;
-
-        // zone 순환 (같은 thread는 연속으로 배치)
-        const currentZone = textFlowZones[zoneIndex % textFlowZones.length];
-
+        const threadId = createId('thread');
+        const blockId = `${threadId}_seg_000`;
         nextDocument.threads.push({
-          id: newThreadId,
+          id: threadId,
           type: 'text-flow',
-          canonicalText: [{ text: threadData.text }],
-          semanticRole: threadData.role,
-          styleOverride: getRoleStyleOverride(threadData.role),
+          canonicalText: [{ text: slot.text }],
+          semanticRole: slot.role,
+          styleOverride: getRoleStyleOverride(slot.role),
           ebook: {
             include: true,
             toc: {
-              enabled: threadData.role === 'heading' || threadData.role === 'subheading',
+              enabled: slot.role === 'heading' || slot.role === 'subheading',
             },
           },
-          originBlockId: newBlockId,
-          sourceZoneId: currentZone.id,
-          sourcePageId: rootPage.id,
-          zoneSequence: [{ pageId: rootPage.id, zoneId: currentZone.id }],
+          originBlockId: blockId,
+          sourceZoneId: getFlowStartZoneId(nextDocument, resolvedMasterId, zone.id),
+          sourcePageId: newPage.id,
+          zoneSequence: [{ pageId: newPage.id, zoneId: getFlowStartZoneId(nextDocument, resolvedMasterId, zone.id) }],
         });
-
-        createdThreadIds.push(newThreadId);
-        invalidatedThreadIds.push(newThreadId);
-        zoneIndex++;
+        invalidatedThreadIds.push(threadId);
       }
 
+      rebuildContributionLayout(nextDocument, contributionRecord, createPageFromMaster);
       syncTocFromThreads(nextDocument);
       nextDocument.meta.updatedAt = new Date().toISOString();
-      const next = pushHistoryEntry(state, `Add ${threads.length} AI-parsed threads`, nextDocument);
+      const next = pushHistoryEntry(state, `Add contribution ${contribution.title}`, nextDocument);
 
       return {
         document: nextDocument,
@@ -2330,90 +2816,245 @@ export const usePublishingStore = create<PublishingStore>()((set) => ({
           ...state.pagination,
           invalidatedThreadIds: Array.from(new Set([...state.pagination.invalidatedThreadIds, ...invalidatedThreadIds])),
         },
-        selection: state.selection,
+        selection: {
+          pageId: newPage.id,
+          zoneId: newPage.zones[0]?.zoneId ?? null,
+          blockId: null,
+        },
         ...next,
       };
     });
 
-    return createdThreadIds;
+    return createdContributionId;
   },
 
-  handleThreadOverflow: (threadId, overflowText, overflowStartOffset) => {
+  createSpeakerContribution: (pageId, masterId): string | null => {
+    const state = get();
+    const page = state.document.pages.find((item) => item.id === pageId) ?? state.document.pages[0];
+    const resolvedMasterId = masterId
+      ?? state.document.masters.items.find((item) => item.mode === 'speaker-thread')?.id
+      ?? page?.masterId;
+    const master = state.document.masters.items.find((item) => item.id === resolvedMasterId);
+    if (!page || !resolvedMasterId || !master) {
+      return null;
+    }
+
+    const draftSlots = master.slotSchema?.map((slot) => ({
+      slotKey: slot.slotKey,
+      label: slot.label,
+      role: slot.role,
+      text: '',
+      language: slot.language,
+    })) ?? [];
+
+    return get().addContribution(pageId, {
+      track: '',
+      title: '',
+      slots: draftSlots,
+    }, resolvedMasterId);
+  },
+
+  updateContributionSlotText: (contributionId, slotKey, text) =>
     set((state) => {
       const nextDocument = clone(state.document);
-      const thread = nextDocument.threads.find((t) => t.id === threadId);
-      if (!thread || !overflowText) {
+      const contribution = (nextDocument.contributions ?? []).find((item) => item.id === contributionId);
+      if (!contribution) {
         return state;
       }
 
-      // 현재 thread의 텍스트를 오버플로우 지점에서 분할
-      const fullText = thread.canonicalText.map((r) => r.text).join('');
-      const beforeOverflow = fullText.slice(0, overflowStartOffset);
-      const afterOverflow = overflowText;
-
-      // 기존 thread는 오버플로우 전까지만 유지
-      thread.canonicalText = [{ text: beforeOverflow }];
-
-      // 같은 thread가 계속되는 경우: 현재 마스터로 새 페이지 생성
-      const sourcePage = nextDocument.pages.find((p) => p.id === thread.sourcePageId);
-      if (!sourcePage) {
+      const normalizedText = normalizeContributionSlotText(slotKey, text);
+      const slot = contribution.slots.find((item) => item.slotKey === slotKey);
+      const master = nextDocument.masters.items.find((item) => item.id === contribution.masterId);
+      if (!slot && !master) {
         return state;
       }
 
-      const newPageId = createId('page');
-      const newPage: PublishingDocument['pages'][number] = {
-        id: newPageId,
-        pageNumber: Math.max(...nextDocument.pages.map(p => p.pageNumber)) + 1,
-        masterId: sourcePage.masterId,
-        pageRole: sourcePage.pageRole,
-        zones: [],
-        derivedFrom: {
-          reason: 'auto-pagination',
-          previousPageId: sourcePage.id,
-        },
-      };
+      const resolvedSlot = slot ?? (() => {
+        const definition = master?.slotSchema?.find((item) => item.slotKey === slotKey);
+        if (!definition) {
+          return null;
+        }
+        const createdSlot: ContributionSlotContent = {
+          slotKey: definition.slotKey,
+          label: definition.label,
+          role: definition.role,
+          language: definition.language,
+          text: '',
+        };
+        contribution.slots.push(createdSlot);
+        return createdSlot;
+      })();
+      if (!resolvedSlot) {
+        return state;
+      }
 
-      nextDocument.pages.push(newPage);
+      resolvedSlot.text = normalizedText;
+      contribution.title =
+        contribution.slots.find((item) => item.slotKey === 'title_ko')?.text
+        || contribution.slots.find((item) => item.slotKey === 'title_en')?.text
+        || contribution.title;
+      contribution.track = contribution.slots.find((item) => item.slotKey === 'track')?.text || contribution.track;
+      contribution.presentationTrackId =
+        contribution.presentationTrackId
+        ?? inferPresentationTrackId(
+          nextDocument.meta.presentationTracks?.length ? nextDocument.meta.presentationTracks : DEFAULT_PRESENTATION_TRACKS,
+          contribution.track,
+          contribution.title,
+        );
+      contribution.status = 'draft';
+      contribution.updatedAt = new Date().toISOString();
 
-      // 오버플로우된 텍스트로 새 thread 생성
-      const newThreadId = `${threadId}_overflow_${Date.now()}`;
-      const newBlockId = `${newThreadId}_seg_000`;
+      const thread = findThreadForContributionSlot(nextDocument, contribution, slotKey);
+      if (thread && normalizedText) {
+        thread.canonicalText = [{ text: normalizedText }];
+        thread.semanticRole = resolvedSlot.role;
+        thread.styleOverride = getRoleStyleOverride(resolvedSlot.role);
+      } else if (thread && !normalizedText) {
+        nextDocument.threads = nextDocument.threads.filter((item) => item.id !== thread.id);
+      } else if (!thread && normalizedText) {
+        const zone = findZoneForContributionSlot(nextDocument, contribution.masterId, slotKey);
+        if (zone) {
+          const threadId = createId('thread');
+          const blockId = `${threadId}_seg_000`;
+          nextDocument.threads.push({
+            id: threadId,
+            type: 'text-flow',
+            canonicalText: [{ text: normalizedText }],
+            semanticRole: resolvedSlot.role,
+            styleOverride: getRoleStyleOverride(resolvedSlot.role),
+            ebook: {
+              include: true,
+              toc: {
+                enabled: resolvedSlot.role === 'heading' || resolvedSlot.role === 'subheading',
+              },
+            },
+            originBlockId: blockId,
+            sourceZoneId: getFlowStartZoneId(nextDocument, contribution.masterId, zone.id),
+            sourcePageId: contribution.pageId,
+            zoneSequence: [{ pageId: contribution.pageId, zoneId: getFlowStartZoneId(nextDocument, contribution.masterId, zone.id) }],
+          });
+        }
+      }
 
-      const newThread: PublishingDocument['threads'][number] = {
-        id: newThreadId,
-        type: 'text-flow',
-        canonicalText: [{ text: afterOverflow }],
-        semanticRole: thread.semanticRole,
-        styleOverride: thread.styleOverride,
-        ebook: thread.ebook,
-        originBlockId: newBlockId,
-        sourceZoneId: thread.sourceZoneId,
-        sourcePageId: newPageId,
-        zoneSequence: [{ pageId: newPageId, zoneId: thread.sourceZoneId }],
-      };
-
-      nextDocument.threads.push(newThread);
-
-      const invalidatedThreadIds = Array.from(new Set([
-        ...state.pagination.invalidatedThreadIds,
-        threadId,
-        newThreadId,
-      ]));
-
+      rebuildContributionLayout(nextDocument, contribution, createPageFromMaster);
+      renumberContributionPresentationCodes(nextDocument);
+      syncTocFromThreads(nextDocument);
       nextDocument.meta.updatedAt = new Date().toISOString();
-      const next = pushHistoryEntry(state, `Auto-paginate thread ${threadId}`, nextDocument);
+      const next = pushHistoryEntry(state, `Update contribution slot ${slotKey}`, nextDocument);
 
       return {
         document: nextDocument,
         pagination: {
           ...state.pagination,
-          invalidatedThreadIds,
+          invalidatedThreadIds: thread
+            ? Array.from(new Set([...state.pagination.invalidatedThreadIds, thread.id]))
+            : state.pagination.invalidatedThreadIds,
         },
-        selection: state.selection,
         ...next,
       };
-    });
-  },
+    }),
+
+  updateContributionPresentationTrack: (contributionId, trackId) =>
+    set((state) => {
+      const nextDocument = clone(state.document);
+      const contribution = (nextDocument.contributions ?? []).find((item) => item.id === contributionId);
+      if (!contribution) {
+        return state;
+      }
+
+      contribution.presentationTrackId = trackId || undefined;
+      contribution.status = 'draft';
+      contribution.updatedAt = new Date().toISOString();
+      renumberContributionPresentationCodes(nextDocument);
+      nextDocument.meta.updatedAt = new Date().toISOString();
+      const next = pushHistoryEntry(state, `Update contribution presentation track ${contributionId}`, nextDocument);
+      return {
+        document: nextDocument,
+        ...next,
+      };
+    }),
+
+  updateContributionStatus: (contributionId, status) =>
+    set((state) => {
+      const nextDocument = clone(state.document);
+      const contribution = (nextDocument.contributions ?? []).find((item) => item.id === contributionId);
+      if (!contribution) {
+        return state;
+      }
+
+      contribution.status = status;
+      contribution.updatedAt = new Date().toISOString();
+      nextDocument.meta.updatedAt = new Date().toISOString();
+      const next = pushHistoryEntry(state, `Update contribution status ${contributionId}`, nextDocument);
+      return {
+        document: nextDocument,
+        ...next,
+      };
+    }),
+
+  moveContribution: (contributionId, direction) =>
+    set((state) => {
+      const nextDocument = clone(state.document);
+      const currentIndex = (nextDocument.contributions ?? []).findIndex((item) => item.id === contributionId);
+      if (currentIndex < 0) {
+        return state;
+      }
+
+      const targetIndex = direction === 'up' ? currentIndex - 1 : currentIndex + 1;
+      if (targetIndex < 0 || targetIndex >= nextDocument.contributions.length) {
+        return state;
+      }
+
+      const [moved] = nextDocument.contributions.splice(currentIndex, 1);
+      nextDocument.contributions.splice(targetIndex, 0, moved);
+      renumberContributionPresentationCodes(nextDocument);
+      nextDocument.meta.updatedAt = new Date().toISOString();
+      const next = pushHistoryEntry(state, `Move contribution ${contributionId} ${direction}`, nextDocument);
+
+      return {
+        document: nextDocument,
+        selection: {
+          pageId: moved.pageId,
+          zoneId: nextDocument.pages.find((page) => page.id === moved.pageId)?.zones[0]?.zoneId ?? null,
+          blockId: null,
+        },
+        ...next,
+      };
+    }),
+
+  deleteContribution: (contributionId) =>
+    set((state) => {
+      const nextDocument = clone(state.document);
+      const contribution = (nextDocument.contributions ?? []).find((item) => item.id === contributionId);
+      if (!contribution) {
+        return state;
+      }
+
+      const chainPageIds = new Set(
+        nextDocument.pages
+          .filter((page) => getChainRootPageId(nextDocument, page.id) === contribution.pageId)
+          .map((page) => page.id),
+      );
+      nextDocument.contributions = nextDocument.contributions.filter((item) => item.id !== contributionId);
+      nextDocument.threads = nextDocument.threads.filter((thread) => thread.sourcePageId !== contribution.pageId);
+      nextDocument.pages = nextDocument.pages.filter((page) => !chainPageIds.has(page.id));
+      renumberContributionPresentationCodes(nextDocument);
+      syncTocFromThreads(nextDocument);
+      nextDocument.meta.updatedAt = new Date().toISOString();
+      const fallbackPage = nextDocument.pages[0] ?? null;
+      const next = pushHistoryEntry(state, `Delete contribution ${contributionId}`, nextDocument);
+
+      return {
+        document: nextDocument,
+        selection: {
+          pageId: fallbackPage?.id ?? null,
+          zoneId: fallbackPage?.zones[0]?.zoneId ?? null,
+          blockId: null,
+        },
+        ...next,
+      };
+    }),
+
 }));
 
 usePublishingStore.subscribe((state) => {

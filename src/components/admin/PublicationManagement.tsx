@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { collection, getDocs, addDoc, updateDoc, deleteDoc, doc, query, orderBy } from 'firebase/firestore';
+import { collection, getDocs, addDoc, updateDoc, doc, query, orderBy, writeBatch } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { Publication, Conference, BilingualValue } from '@/types/content';
 import { showToast } from '@/components/common/Toast';
@@ -89,7 +89,17 @@ const PublicationManagement: React.FC = () => {
   const handleDelete = async (id: string) => {
     if (!confirm('정말로 이 간행물을 삭제하시겠습니까? 연결된 문서 정보가 모두 사라집니다.')) return;
     try {
-      await deleteDoc(doc(db, 'publications', id));
+      const editorDocs = await getDocs(collection(db, 'publications', id, 'editor'));
+      const editorPages = await getDocs(collection(db, 'publications', id, 'editorPages'));
+      const editorAssets = await getDocs(collection(db, 'publications', id, 'editorAssets'));
+      const batch = writeBatch(db);
+
+      editorDocs.docs.forEach((item) => batch.delete(item.ref));
+      editorPages.docs.forEach((item) => batch.delete(item.ref));
+      editorAssets.docs.forEach((item) => batch.delete(item.ref));
+      batch.delete(doc(db, 'publications', id));
+      await batch.commit();
+
       await loadData();
       showToast('간행물이 삭제되었습니다.', 'success');
     } catch (error) {
@@ -353,7 +363,7 @@ const PublicationForm: React.FC<PublicationFormProps> = ({ publication, conferen
               <label className="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-2 uppercase tracking-wider">콘텐츠 유형</label>
               <select
                 value={formData.type}
-                onChange={(e) => setFormData({ ...formData, type: e.target.value as any })}
+                onChange={(e) => setFormData({ ...formData, type: e.target.value as any })} // eslint-disable-line @typescript-eslint/no-explicit-any
                 className="w-full px-5 py-4 bg-gray-50 dark:bg-gray-900 border-2 border-transparent focus:border-brand-primary focus:bg-white dark:focus:bg-gray-950 rounded-2xl transition-all text-gray-900 dark:text-gray-100 font-medium outline-none"
               >
                 <option value="abstract">초록집</option>

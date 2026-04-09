@@ -117,7 +117,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({
   };
 
   // 현재 언어로 제목 변환
-  const getLocalTitle = (title: any): string => {
+  const getLocalTitle = (title: any): string => { // eslint-disable-line @typescript-eslint/no-explicit-any
     if (typeof title === 'string') return title;
     return title?.[language] || title?.ko || title?.en || '';
   };

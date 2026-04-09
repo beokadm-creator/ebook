@@ -1,4 +1,7 @@
 {
+  "functions": {
+    "source": "functions"
+  },
   "hosting": {
     "public": "dist",
     "ignore": [
@@ -7,6 +10,14 @@
       "**/node_modules/**"
     ],
     "rewrites": [
+      {
+        "source": "/api/assets",
+        "function": "assetProxy"
+      },
+      {
+        "source": "/api/glm/chat/completions",
+        "function": "glmProxy"
+      },
       {
         "source": "**",
         "destination": "/index.html"

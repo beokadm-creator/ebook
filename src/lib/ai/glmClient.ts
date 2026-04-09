@@ -31,20 +31,30 @@ class GLMClient {
 
   constructor() {
     this.apiKey = import.meta.env.VITE_GLM_API_KEY;
-    this.apiBase = (import.meta.env.VITE_GLM_API_BASE || 'https://api.z.ai/api/coding/paas/v4').replace(/\/$/, '');
+    const defaultApiBase = import.meta.env.DEV
+      ? 'https://api.z.ai/api/coding/paas/v4'
+      : '/api/glm';
+    this.apiBase = (import.meta.env.VITE_GLM_API_BASE || defaultApiBase).replace(/\/$/, '');
     this.model = import.meta.env.VITE_GLM_MODEL || 'glm-4.7';
     this.disableThinking = import.meta.env.VITE_GLM_DISABLE_THINKING !== 'false';
+  }
 
+  private usesProxy() {
+    return this.apiBase.startsWith('/');
   }
 
   private ensureConfigured() {
+    if (this.usesProxy()) {
+      return;
+    }
+
     if (!this.apiKey || this.apiKey === 'your_glm_api_key') {
-      throw new Error('GLM API Key not configured. Please set VITE_GLM_API_KEY in your .env file');
+      throw new Error('GLM API Key not configured. Please set VITE_GLM_API_KEY in your local .env file or configure the server proxy secret.');
     }
   }
 
   isConfigured(): boolean {
-    return !!this.apiKey && this.apiKey !== 'your_glm_api_key';
+    return this.usesProxy() || (!!this.apiKey && this.apiKey !== 'your_glm_api_key');
   }
 
   async createChatCompletion(
@@ -69,7 +79,7 @@ class GLMClient {
         headers: {
           'Content-Type': 'application/json',
           'Accept-Language': 'ko-KR,ko',
-          'Authorization': `Bearer ${this.apiKey}`,
+          ...(this.apiKey && !this.usesProxy() ? { Authorization: `Bearer ${this.apiKey}` } : {}),
         },
         body: JSON.stringify({
           model: this.model,

@@ -1,6 +1,7 @@
 import React, { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import { FunnelIcon, ListBulletIcon, MagnifyingGlassIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import { EbookEntry } from '@/lib/publishing/ebook';
+import { getRenderableImageUrl } from '@/lib/publishing/assets';
 import { renderRunsToReact } from '@/lib/publishing/richText';
 import { SourcePublicationType } from '@/types/publishing';
 import {
@@ -234,7 +235,7 @@ const EbookViewer: React.FC<EbookViewerProps> = ({ publicationId, title, entries
                   className={entry.readingWidth === 'full' || readingWidth === 'wide' ? 'mx-auto max-w-5xl' : 'mx-auto max-w-3xl'}
                 >
                   <img
-                    src={entry.src}
+                    src={getRenderableImageUrl(entry.src)}
                     alt={entry.alt}
                     className="w-full rounded-[28px] shadow-[0_20px_60px_rgba(15,23,42,0.12)]"
                   />

@@ -5,6 +5,7 @@ import {
   getDocs,
   orderBy,
   query,
+  setDoc,
   writeBatch,
 } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
@@ -19,14 +20,45 @@ interface PublishingMetaDoc {
   version: number;
   meta: PublishingDocument['meta'];
   layout: PublishingDocument['layout'];
-  masters: PublishingDocument['masters'];
   threads: PublishingDocument['threads'];
+  contributions: PublishingDocument['contributions'];
   toc: PublishingDocument['toc'];
+  updatedAt: string;
+  masters?: PublishingDocument['masters'];
+}
+
+interface PublishingMasterLibraryDoc {
+  masters: PublishingDocument['masters'];
   updatedAt: string;
 }
 
+const looksLikeLegacyStarterDocument = (document: PublishingDocument) => {
+  const hasNoContributions = !document.contributions?.length;
+  const hasLegacyCoverPage = document.pages.some((page) => page.pageRole === 'cover' && page.masterId === 'master_cover');
+  const hasLegacyStarterThreads = document.threads.some((thread) => thread.id === 'thread_cover_title' || thread.id === 'thread_body_main');
+  return hasNoContributions && hasLegacyCoverPage && hasLegacyStarterThreads;
+};
+
+const migrateLegacyStarterDocument = (document: PublishingDocument) => {
+  if (!looksLikeLegacyStarterDocument(document)) {
+    return document;
+  }
+
+  const next = createInitialPublishingDocument(document.id);
+  next.meta = {
+    ...next.meta,
+    ...document.meta,
+    updatedAt: document.meta.updatedAt,
+  };
+  next.assets = document.assets;
+  return next;
+};
+
 const metaRef = (publicationId: string) =>
   doc(db, 'publications', publicationId, 'editor', META_DOC_ID);
+
+const masterLibraryRef = () =>
+  doc(db, 'publishingGlobals', 'masterLibrary');
 
 const pagesCollection = (publicationId: string) =>
   collection(db, 'publications', publicationId, 'editorPages');
@@ -56,18 +88,33 @@ const stripUndefinedDeep = <T,>(value: T): T => {
 };
 
 export const loadPublishingDocument = async (publicationId: string) => {
-  const [publicationSnap, metaSnap, pageSnaps, assetSnaps] = await Promise.all([
+  const [publicationSnap, metaSnap, masterLibrarySnap, pageSnaps, assetSnaps] = await Promise.all([
     getDoc(doc(db, 'publications', publicationId)),
     getDoc(metaRef(publicationId)),
+    getDoc(masterLibraryRef()),
     getDocs(query(pagesCollection(publicationId), orderBy('pageNumber', 'asc'))),
     getDocs(assetsCollection(publicationId)),
   ]);
 
   const publicationData = publicationSnap.exists() ? publicationSnap.data() : null;
   const sourcePublicationType = publicationData?.type as PublishingDocument['meta']['sourcePublicationType'] | undefined;
+  const globalMasters = masterLibrarySnap.exists()
+    ? (masterLibrarySnap.data() as PublishingMasterLibraryDoc).masters
+    : null;
 
   if (!metaSnap.exists()) {
     const initialDocument = createInitialPublishingDocument(publicationId);
+    if (globalMasters) {
+      initialDocument.masters = globalMasters;
+      initialDocument.pages = initialDocument.pages.map((page) => ({
+        ...page,
+        masterId: globalMasters.defaultMasterId,
+        zones: globalMasters.items.find((item) => item.id === globalMasters.defaultMasterId)?.contentZones.map((zone) => ({
+          zoneId: zone.id,
+          blocks: [],
+        })) ?? [],
+      }));
+    }
     if (sourcePublicationType) {
       initialDocument.meta.sourcePublicationType = sourcePublicationType;
       const recommendedPreset = getRecommendedPreset(sourcePublicationType, initialDocument.meta.publicationType);
@@ -94,24 +141,35 @@ export const loadPublishingDocument = async (publicationId: string) => {
         }
       }
     }
-    return initialDocument;
+    return migrateLegacyStarterDocument(initialDocument);
   }
 
   const meta = metaSnap.data() as PublishingMetaDoc;
+  if (!globalMasters && meta.masters) {
+    await setDoc(
+      masterLibraryRef(),
+      stripUndefinedDeep({
+        masters: meta.masters,
+        updatedAt: new Date().toISOString(),
+      } satisfies PublishingMasterLibraryDoc),
+    );
+  }
   const pages = pageSnaps.docs.map((item) => item.data()) as PublishingDocument['pages'];
   const assets = assetSnaps.docs.map((item) => item.data()) as PublishingDocument['assets'];
+  const masters = globalMasters ?? meta.masters ?? createInitialPublishingDocument(publicationId).masters;
 
-  return {
+  return migrateLegacyStarterDocument({
     id: publicationId,
     version: meta.version,
     meta: meta.meta,
     layout: meta.layout,
-    masters: meta.masters,
+    masters,
     pages,
     threads: meta.threads,
+    contributions: meta.contributions ?? [],
     toc: meta.toc,
     assets,
-  } satisfies PublishingDocument;
+  } satisfies PublishingDocument);
 };
 
 export const savePublishingDocument = async (publicationId: string, documentState: PublishingDocument) => {
@@ -124,17 +182,25 @@ export const savePublishingDocument = async (publicationId: string, documentStat
     version: documentState.version,
     meta: documentState.meta,
     layout: documentState.layout,
-    masters: documentState.masters,
     threads: documentState.threads,
+    contributions: documentState.contributions,
     toc: documentState.toc,
     updatedAt: new Date().toISOString(),
   };
+  const masterLibrary: PublishingMasterLibraryDoc = {
+    masters: documentState.masters,
+    updatedAt: new Date().toISOString(),
+  };
   const sanitizedMeta = stripUndefinedDeep(meta);
+  const sanitizedMasterLibrary = stripUndefinedDeep(masterLibrary);
   const sanitizedPages = documentState.pages.map((page) => stripUndefinedDeep(page));
   const sanitizedAssets = documentState.assets.map((asset) => stripUndefinedDeep(asset));
 
   operations.push((batch) => {
     batch.set(metaRef(publicationId), sanitizedMeta);
+  });
+  operations.push((batch) => {
+    batch.set(masterLibraryRef(), sanitizedMasterLibrary);
   });
 
   const nextPageIds = new Set(documentState.pages.map((page) => page.id));

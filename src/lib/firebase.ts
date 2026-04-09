@@ -51,7 +51,7 @@ if (import.meta.env.DEV && import.meta.env.VITE_FIREBASE_USE_EMULATOR === 'true'
   try {
     connectFirestoreEmulator(db, 'localhost', 8080);
     console.log('🔥 Firestore Emulator에 연결되었습니다 (localhost:8080)');
-  } catch (error) {
+  } catch {
     console.log('Firestore Emulator 이미 연결됨');
   }
 
@@ -59,7 +59,7 @@ if (import.meta.env.DEV && import.meta.env.VITE_FIREBASE_USE_EMULATOR === 'true'
   try {
     connectAuthEmulator(auth, 'http://localhost:9099');
     console.log('🔥 Auth Emulator에 연결되었습니다 (localhost:9099)');
-  } catch (error) {
+  } catch {
     console.log('Auth Emulator 이미 연결됨');
   }
 
@@ -67,7 +67,7 @@ if (import.meta.env.DEV && import.meta.env.VITE_FIREBASE_USE_EMULATOR === 'true'
   try {
     connectStorageEmulator(storage, 'localhost', 9199);
     console.log('🔥 Storage Emulator에 연결되었습니다 (localhost:9199)');
-  } catch (error) {
+  } catch {
     console.log('Storage Emulator 이미 연결됨');
   }
 
@@ -75,7 +75,7 @@ if (import.meta.env.DEV && import.meta.env.VITE_FIREBASE_USE_EMULATOR === 'true'
   try {
     connectFunctionsEmulator(functions, 'localhost', 5001);
     console.log('🔥 Functions Emulator에 연결되었습니다 (localhost:5001)');
-  } catch (error) {
+  } catch {
     console.log('Functions Emulator 이미 연결됨');
   }
 }

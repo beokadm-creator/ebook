@@ -140,7 +140,7 @@ const ConferenceList: React.FC = () => {
 
         setConferences(sortedConferences);
         setFilteredConferences(sortedConferences);
-      } catch (err: any) {
+      } catch (err: any) { // eslint-disable-line @typescript-eslint/no-explicit-any
         console.error('Error fetching conferences:', err);
         setError('학술대회 목록을 불러오는데 실패했습니다.');
       } finally {

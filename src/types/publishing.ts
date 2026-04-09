@@ -12,6 +12,26 @@ export type DecorationKind = 'text' | 'image' | 'shape';
 export type BlockKind = 'text' | 'image';
 export type TextRole = 'title' | 'subtitle' | 'heading' | 'subheading' | 'paragraph' | 'caption' | 'quote';
 export type ElementScope = 'global-fixed' | 'template-fixed' | 'page-editable';
+export type MasterMode = 'speaker-thread' | 'page-freeform';
+export type ContributionLanguage = 'ko' | 'en' | 'mixed';
+export type ContributionSlotKey =
+  | 'track'
+  | 'title'
+  | 'title_ko'
+  | 'title_en'
+  | 'authors'
+  | 'authors_ko'
+  | 'authors_en'
+  | 'affiliation'
+  | 'affiliation_ko'
+  | 'affiliation_en'
+  | 'body'
+  | 'body_ko'
+  | 'body_en'
+  | 'captions'
+  | 'keywords'
+  | 'references'
+  | (string & {});
 
 export interface PageFrame {
   x: number;
@@ -83,7 +103,11 @@ export interface DecorationElement {
   shape?: 'rect' | 'line' | 'ellipse';
   fill?: string;
   assetId?: string;
-  textBinding?: 'page.number' | 'document.title' | 'section.number';
+  src?: string;
+  storagePath?: string;
+  naturalWidth?: number;
+  naturalHeight?: number;
+  textBinding?: 'page.number' | 'document.title' | 'section.number' | 'presentation.code';
   text?: string;
   style?: Partial<TypographyStyle>;
 }
@@ -108,6 +132,8 @@ export interface MasterTemplate {
   id: string;
   name: string;
   scope: 'global' | 'page';
+  mode?: MasterMode;
+  usesPresentationTracks?: boolean;
   locked: boolean;
   background: {
     fill: string;
@@ -115,6 +141,16 @@ export interface MasterTemplate {
   };
   decorations: DecorationElement[];
   contentZones: ContentZoneTemplate[];
+  slotSchema?: ContributionSlotDefinition[];
+}
+
+export interface ContributionSlotDefinition {
+  slotKey: ContributionSlotKey;
+  label: string;
+  role: TextRole;
+  language?: ContributionLanguage;
+  required?: boolean;
+  allowOverflow?: boolean;
 }
 
 export interface TextMarkSet {
@@ -245,6 +281,40 @@ export interface TextThread {
   }>;
 }
 
+export interface ContributionSlotContent {
+  slotKey: ContributionSlotKey;
+  label: string;
+  text: string;
+  role: TextRole;
+  language?: ContributionLanguage;
+}
+
+export type PresentationTrackKind = 'oral' | 'poster';
+
+export interface PresentationTrackOption {
+  id: string;
+  kind: PresentationTrackKind;
+  prefix: string;
+  label: string;
+  glmHints?: string[];
+}
+
+export interface ContributionItem {
+  id: string;
+  order: number;
+  masterId: string;
+  pageId: string;
+  status?: 'draft' | 'completed';
+  title: string;
+  track?: string;
+  presentationTrackId?: string;
+  presentationCode?: string;
+  sourceFileName?: string;
+  createdAt: string;
+  updatedAt: string;
+  slots: ContributionSlotContent[];
+}
+
 export interface TocItemNode {
   id: string;
   label: LocaleText;
@@ -298,6 +368,7 @@ export interface PublishingDocument {
     locale: string;
     createdAt: string;
     updatedAt: string;
+    presentationTracks?: PresentationTrackOption[];
   };
   layout: {
     pagePreset: PagePreset;
@@ -310,6 +381,7 @@ export interface PublishingDocument {
   };
   pages: PublicationPage[];
   threads: TextThread[];
+  contributions: ContributionItem[];
   toc: {
     items: TocItemNode[];
   };

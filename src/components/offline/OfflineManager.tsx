@@ -91,7 +91,7 @@ export const OfflineManager: React.FC<OfflineManagerProps> = ({ children }) => {
     }
   };
 
-  const syncAction = async (action: any) => {
+  const syncAction = async (action: any) => { // eslint-disable-line @typescript-eslint/no-explicit-any
     // TODO: 실제 동기화 로직 구현
     void action;
   };
@@ -194,7 +194,7 @@ export const useOfflineAction = () => {
     };
   }, []);
 
-  const saveOfflineAction = (action: any) => {
+  const saveOfflineAction = (action: any) => { // eslint-disable-line @typescript-eslint/no-explicit-any
     if (!isOnline) {
       try {
         const pendingActions = localStorage.getItem('pendingSyncActions');

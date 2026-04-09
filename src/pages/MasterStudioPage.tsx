@@ -1,4 +1,4 @@
-import React, { Suspense, lazy, useEffect, useRef, useState } from 'react';
+import React, { Suspense, lazy, useCallback, useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import ProtectedRoute from '@/components/auth/ProtectedRoute';
 import { useAuth } from '@/contexts/AuthContext';
@@ -14,14 +14,28 @@ const MasterStudioPage: React.FC = () => {
   const { publicationId } = useParams<{ publicationId: string }>();
   const { user, role, loading: authLoading } = useAuth();
   const initialize = usePublishingStore((state) => state.initialize);
-  const documentState = usePublishingStore((state) => state.document);
-  const historyRevision = usePublishingStore((state) => state.history.revision);
-  const autosave = usePublishingStore((state) => state.autosave);
   const markSaving = usePublishingStore((state) => state.markSaving);
   const markSaved = usePublishingStore((state) => state.markSaved);
   const markSaveFailed = usePublishingStore((state) => state.markSaveFailed);
   const [loading, setLoading] = useState(true);
-  const saveTimer = useRef<number | null>(null);
+
+  const handleSaveMaster = useCallback(async () => {
+    if (!publicationId || authLoading || !user || role !== 'admin') {
+      return;
+    }
+
+    markSaving();
+    try {
+      await savePublishingDocument(publicationId, usePublishingStore.getState().document);
+      window.localStorage.removeItem(getDraftKey(publicationId));
+      markSaved();
+      showToast('마스터를 저장했습니다.', 'success');
+    } catch (error) {
+      logError(error, 'MasterStudio-save');
+      markSaveFailed('저장 실패');
+      showToast('마스터 저장에 실패했습니다.', 'error');
+    }
+  }, [authLoading, markSaveFailed, markSaved, markSaving, publicationId, role, user]);
 
   useEffect(() => {
     if (!publicationId || authLoading || !user || role !== 'admin') {
@@ -55,36 +69,6 @@ const MasterStudioPage: React.FC = () => {
     void load();
   }, [authLoading, initialize, publicationId, role, user]);
 
-  useEffect(() => {
-    if (!publicationId || authLoading || !user || role !== 'admin' || loading || !autosave.dirty) {
-      return;
-    }
-
-    if (saveTimer.current) {
-      window.clearTimeout(saveTimer.current);
-    }
-
-    saveTimer.current = window.setTimeout(() => {
-      markSaving();
-      void savePublishingDocument(publicationId, documentState)
-        .then(() => {
-          window.localStorage.removeItem(getDraftKey(publicationId));
-          markSaved();
-        })
-        .catch((error) => {
-          logError(error, 'MasterStudio-save');
-          markSaveFailed('저장 실패');
-          showToast('마스터 저장에 실패했습니다.', 'error');
-        });
-    }, 1500);
-
-    return () => {
-      if (saveTimer.current) {
-        window.clearTimeout(saveTimer.current);
-      }
-    };
-  }, [authLoading, autosave.dirty, documentState, historyRevision, loading, markSaveFailed, markSaved, markSaving, publicationId, role, user]);
-
   if (!publicationId) {
     return <div className="p-8 text-center text-red-600">간행물 ID가 없습니다.</div>;
   }
@@ -112,7 +96,7 @@ const MasterStudioPage: React.FC = () => {
           </div>
         }
       >
-        <MasterStudioShell publicationId={publicationId} />
+        <MasterStudioShell publicationId={publicationId} onSaveMaster={handleSaveMaster} />
       </Suspense>
     </ProtectedRoute>
   );

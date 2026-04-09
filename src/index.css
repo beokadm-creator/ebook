@@ -2,8 +2,43 @@
 @tailwind components;
 @tailwind utilities;
 
+@font-face {
+  font-family: 'NanumSquare';
+  src: url('/NanumSquareR.ttf') format('truetype');
+  font-weight: 400;
+  font-style: normal;
+}
+
+@font-face {
+  font-family: 'NanumSquare';
+  src: url('/NanumSquareB.ttf') format('truetype');
+  font-weight: 700;
+  font-style: normal;
+}
+
+@font-face {
+  font-family: 'NanumSquare';
+  src: url('/NanumSquareEB.ttf') format('truetype');
+  font-weight: 800;
+  font-style: normal;
+}
+
+@font-face {
+  font-family: 'NanumSquareBold';
+  src: url('/NanumSquareB.ttf') format('truetype');
+  font-weight: 700;
+  font-style: normal;
+}
+
+@font-face {
+  font-family: 'NanumSquareExtraBold';
+  src: url('/NanumSquareEB.ttf') format('truetype');
+  font-weight: 800;
+  font-style: normal;
+}
+
 :root {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
+  font-family: 'NanumSquare', -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
   line-height: 1.6;
   font-weight: 400;
   font-size: 16px; /* 기본 글자 크기 증가 - 접근성 개선 */
