@@ -26,7 +26,7 @@ interface PublicationManagementProps {
   onBack?: () => void;
 }
 
-const PublicationManagement: React.FC<PublicationManagementProps> = ({ conferenceId, onBack }) => {
+const PublicationManagement: React.FC<PublicationManagementProps> = ({ conferenceId }) => {
   const [publications, setPublications] = useState<Publication[]>([]);
   const [conferences, setConferences] = useState<Conference[]>([]);
   const [loading, setLoading] = useState(true);
@@ -279,6 +279,7 @@ const PublicationManagement: React.FC<PublicationManagementProps> = ({ conferenc
         <PublicationForm
           publication={editingPublication}
           conferences={conferences}
+          conferenceId={conferenceId}
           onSubmit={editingPublication ? (data) => handleUpdate(editingPublication.id!, data) : handleCreate}
           onClose={() => {
             setShowForm(false);
@@ -293,11 +294,12 @@ const PublicationManagement: React.FC<PublicationManagementProps> = ({ conferenc
 interface PublicationFormProps {
   publication?: Publication | null;
   conferences: Conference[];
+  conferenceId?: string | null;
   onSubmit: (data: Omit<Publication, 'id' | 'createdAt'>) => Promise<void>;
   onClose: () => void;
 }
 
-const PublicationForm: React.FC<PublicationFormProps> = ({ publication, conferences, onSubmit, onClose }) => {
+const PublicationForm: React.FC<PublicationFormProps> = ({ publication, conferences, conferenceId, onSubmit, onClose }) => {
   const [formData, setFormData] = useState({
     title: { ko: '', en: '' } as BilingualValue,
     conferenceId: '',

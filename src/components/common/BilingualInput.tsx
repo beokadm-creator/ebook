@@ -1,9 +1,4 @@
 import React, { useState } from 'react';
-import {
-  ChevronDownIcon,
-  ChevronUpIcon,
-  GlobeAltIcon
-} from '@heroicons/react/24/outline';
 import { useI18nStore } from '@/stores/i18nStore';
 
 export interface BilingualValue {
@@ -36,7 +31,6 @@ interface InputFieldProps {
   multiline: boolean;
   rows: number;
   maxLength?: number;
-  isPrimary: boolean;
   getCharCount: (lang: 'ko' | 'en') => React.ReactNode;
 }
 
@@ -49,7 +43,6 @@ const InputField: React.FC<InputFieldProps> = ({
   multiline,
   rows,
   maxLength,
-  isPrimary,
   getCharCount
 }) => {
   const langUpper = lang.toUpperCase();
@@ -146,7 +139,6 @@ const BilingualInput: React.FC<BilingualInputProps> = ({
         multiline={multiline}
         rows={rows}
         maxLength={maxLength}
-        isPrimary={lang === language}
         getCharCount={getCharCount}
       />
     );

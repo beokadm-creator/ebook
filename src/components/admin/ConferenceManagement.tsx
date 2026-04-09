@@ -11,11 +11,7 @@ import {
   PencilIcon,
   TrashIcon,
   CalendarIcon,
-  MapPinIcon,
-  UserGroupIcon,
   XMarkIcon,
-  ChevronDownIcon,
-  ChevronUpIcon,
   RectangleStackIcon,
   BookOpenIcon,
   ArrowRightOnRectangleIcon
