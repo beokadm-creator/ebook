@@ -24,7 +24,7 @@ interface GLMChatResponse {
 }
 
 class GLMClient {
-  private apiKey: string;
+  private apiKey?: string;
   private apiBase: string;
   private model: string;
   private disableThinking: boolean;
@@ -32,12 +32,19 @@ class GLMClient {
   constructor() {
     this.apiKey = import.meta.env.VITE_GLM_API_KEY;
     this.apiBase = (import.meta.env.VITE_GLM_API_BASE || 'https://api.z.ai/api/coding/paas/v4').replace(/\/$/, '');
-    this.model = import.meta.env.VITE_GLM_MODEL || 'glm-4.7-flash';
+    this.model = import.meta.env.VITE_GLM_MODEL || 'glm-4.7';
     this.disableThinking = import.meta.env.VITE_GLM_DISABLE_THINKING !== 'false';
 
+  }
+
+  private ensureConfigured() {
     if (!this.apiKey || this.apiKey === 'your_glm_api_key') {
       throw new Error('GLM API Key not configured. Please set VITE_GLM_API_KEY in your .env file');
     }
+  }
+
+  isConfigured(): boolean {
+    return !!this.apiKey && this.apiKey !== 'your_glm_api_key';
   }
 
   async createChatCompletion(
@@ -55,6 +62,8 @@ class GLMClient {
     } = options;
 
     try {
+      this.ensureConfigured();
+
       const response = await fetch(`${this.apiBase}/chat/completions`, {
         method: 'POST',
         headers: {

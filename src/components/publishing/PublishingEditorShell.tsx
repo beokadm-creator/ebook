@@ -1150,6 +1150,11 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
   };
 
   const handleTestAIConnection = async () => {
+    if (!glmClient.isConfigured()) {
+      showToast('GLM API Key가 설정되지 않았습니다. AI 기능 없이도 일반 편집은 가능합니다.', 'info');
+      return;
+    }
+
     try {
       setTestingAI(true);
       const isConnected = await glmClient.testConnection();
@@ -1759,7 +1764,7 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
                   onChange={(e) => setUseAIParsing(e.target.checked)}
                   className="h-4 w-4 rounded border-gray-300"
                 />
-                AI 파싱
+                AI 파싱{!glmClient.isConfigured() ? ' (키 필요)' : ''}
               </label>
               <button
                 type="button"
