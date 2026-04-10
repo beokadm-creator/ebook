@@ -1,10 +1,9 @@
 import { TextMarkSet, TextRun } from '@/types/publishing';
-
-const STRUCTURED_LABEL_PATTERN = /^(목적|방법|대상 및 방법|결과|결론|서론|증례보고|증례 보고|증례|고찰|Introduction|Background|Purpose|Methods?|Materials and Methods|Results?|Conclusion|Conclusions|Case|Case Report|Discussion)(\s*[:.-]\s*|\s+|$)/i;
+import { getStructuredLabelMatch } from '@/lib/publishing/structuredLabels';
 
 const renderStructuredText = (text: string) =>
   text.split('\n').map((line, lineIndex, lines) => {
-    const match = line.match(STRUCTURED_LABEL_PATTERN);
+    const match = getStructuredLabelMatch(line);
     if (!match) {
       return (
         <span key={`line-${lineIndex}`}>
@@ -14,14 +13,11 @@ const renderStructuredText = (text: string) =>
       );
     }
 
-    const label = match[1];
-    const separator = match[2] ?? '';
-    const rest = line.slice(match[0].length);
     return (
       <span key={`line-${lineIndex}`}>
-        <strong>{label}</strong>
-        {separator}
-        {rest}
+        <strong>{match.label}</strong>
+        {match.separator}
+        {match.rest}
         {lineIndex < lines.length - 1 ? '\n' : null}
       </span>
     );

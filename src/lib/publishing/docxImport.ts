@@ -1,6 +1,7 @@
 import mammoth from 'mammoth';
 import { ContributionLanguage, ContributionSlotContent, TextRole } from '@/types/publishing';
 import { contentParser } from '../ai/contentParser';
+import { startsWithStructuredLabel } from './structuredLabels';
 
 export interface ImportedSlotDraft {
   slotKey: string;
@@ -68,7 +69,8 @@ const looksLikeAuthorLine = (line: string) => {
 };
 
 const looksLikeEnglishHeading = (line: string) =>
-  /^(introduction|background|abstract|case|case report|case presentation|discussion|conclusion|keywords?)\b/i.test(line);
+  detectLineLanguage(line) === 'en'
+  && (startsWithStructuredLabel(line) || /^(abstract|keywords?)\b/i.test(line));
 
 const findEnglishTitleIndex = (lines: string[]) => {
   let bestIndex = -1;
@@ -109,12 +111,12 @@ const collectSectionText = (lines: string[], startIndex: number, endIndex: numbe
     .trim();
 
 const buildBilingualAbstractSlots = (lines: string[]): ImportedSlotDraft[] => {
-  const introKo = findIndexByPrefix(lines, ['서론']);
-  const caseKo = findIndexByPrefix(lines, ['증례']);
-  const discussionKo = findIndexByPrefix(lines, ['고찰']);
-  const introEn = findIndexByPrefix(lines, ['introduction', 'background', 'abstract']);
-  const caseEn = findIndexByPrefix(lines, ['case', 'case report', 'case presentation']);
-  const discussionEn = findIndexByPrefix(lines, ['discussion']);
+  const introKo = findIndexByPrefix(lines, ['서론', '배경', '목적']);
+  const caseKo = findIndexByPrefix(lines, ['증례', '증례 보고', '증례보고']);
+  const discussionKo = findIndexByPrefix(lines, ['고찰', '결론', '문헌 고찰', '문헌 고찰 및 결론']);
+  const introEn = findIndexByPrefix(lines, ['introduction', 'background', 'backgrounds', 'abstract', 'purpose']);
+  const caseEn = findIndexByPrefix(lines, ['case', 'cases', 'case report', 'case presentation']);
+  const discussionEn = findIndexByPrefix(lines, ['discussion', 'conclusion', 'conclusions', 'literature review', 'literature review and conclusion']);
   const englishTitleIndex = findEnglishTitleIndex(lines);
 
   const slots: ImportedSlotDraft[] = [];

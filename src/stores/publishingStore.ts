@@ -10,6 +10,7 @@ import {
   sortFlowZonesForReadingOrder,
 } from '@/lib/publishing/contributionLayout';
 import { DEFAULT_PRESENTATION_TRACKS, createImageZone, createInitialPublishingDocument, createMainBodyZone, createSpeakerThreadZones, getThreadPlainText } from '@/lib/publishing/defaultDocument';
+import { normalizeStructuredBodyText } from '@/lib/publishing/structuredLabels';
 import { applyPresetToMaster, TemplatePresetKey } from '@/lib/publishing/templatePresets';
 import {
   ContributionItem,
@@ -548,6 +549,10 @@ const SUPERSCRIPT_CLOSE_PAREN = '⁾';
 
 const normalizeContributionSlotText = (slotKey: string, text: string) => {
   const trimmed = text.trim();
+  if (/^body(_ko|_en)?$/.test(slotKey)) {
+    return normalizeStructuredBodyText(trimmed);
+  }
+
   if (!/^authors(_ko|_en)?$/.test(slotKey)) {
     return trimmed;
   }

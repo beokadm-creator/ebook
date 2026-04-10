@@ -890,6 +890,25 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
 
     return document.pages.filter((page) => getChainRootPageId(document, page.id) === selectedContribution.pageId);
   }, [document, selectedContribution, selectedPage]);
+  const presentationTrackById = useMemo(
+    () => new Map((document.meta.presentationTracks ?? []).map((track) => [track.id, track])),
+    [document.meta.presentationTracks],
+  );
+  const selectedContributionTrackLabel = useMemo(() => {
+    if (!selectedContribution) {
+      return '-';
+    }
+
+    const matchedTrack = selectedContribution.presentationTrackId
+      ? presentationTrackById.get(selectedContribution.presentationTrackId)
+      : undefined;
+
+    if (matchedTrack) {
+      return `${matchedTrack.prefix}. ${matchedTrack.label}`;
+    }
+
+    return selectedContribution.track || selectedContribution.sourceFileName || '-';
+  }, [presentationTrackById, selectedContribution]);
   const pageNumberByContribution = useMemo(
     () => Object.fromEntries(document.contributions.map((item) => {
       const page = document.pages.find((candidate) => candidate.id === item.pageId);
@@ -2803,7 +2822,9 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
               <p className="mb-3 font-semibold text-slate-800">{isSpeakerThreadPage ? '발표자 정보' : '페이지 정보'}</p>
               {selectedContribution ? (
                 <>
-                  <p>발표자 항목: {selectedContribution.title}</p>
+                  <p>발표자 항목: #{selectedContribution.order}</p>
+                  <p>발표 트랙: {selectedContributionTrackLabel}</p>
+                  <p>발표 번호: {selectedContribution.presentationCode ?? '-'}</p>
                   <p>등록 순서: {selectedContribution.order}</p>
                   <p>원고 슬롯: {selectedContribution.slots.length}</p>
                 </>

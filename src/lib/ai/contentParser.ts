@@ -1,5 +1,6 @@
 import { glmClient } from './glmClient';
 import { ContributionLanguage, ContributionSlotContent, TextRole } from '@/types/publishing';
+import { normalizeStructuredBodyText } from '@/lib/publishing/structuredLabels';
 
 export interface ParsedContent {
   track: string;
@@ -29,7 +30,7 @@ const PARSING_PROMPT = `
 
 요구사항:
 1. 제목, 저자, 소속, 한국어 본문, 영문 본문, 그림 캡션을 분리해줘
-2. 문맥이나 내용은 절대 변경하지 말고, 띄어쓰기나 오탈자만 최소한으로 수정해줘
+2. 문맥이나 내용은 절대 변경하지 말고, 오탈자/띄어쓰기 보정도 꼭 필요한 경우에만 최소한으로 적용해줘
 3. 한국어와 영문 내용을 명확히 분리해줘
 4. 이 문서는 발표자용 통합 마스터 1개에 들어가며, 한국어 슬롯과 영문 슬롯이 따로 존재한다
 5. 한국어 내용은 한국어 슬롯에만, 영문 내용은 영문 슬롯에만 넣어야 한다
@@ -37,7 +38,7 @@ const PARSING_PROMPT = `
 7. 영어가 없는데 영어 필드에 한국어를 복사해서 넣지 말고 반드시 빈 문자열로 둔다
 8. 한국어가 없는데 한국어 필드에 영어를 복사해서 넣지 말고 반드시 빈 문자열로 둔다
 9. 저자명에 붙은 소속 표기 숫자/기호(*, 1), 2), 1,2) 등)는 삭제하지 말고 그대로 유지한다
-10. 본문에서 목적/방법/결과/결론 및 Introduction/Methods/Results/Conclusion 같은 섹션 라벨은 본문 첫머리에 보이도록 유지한다
+10. 본문에서 목적/방법/결과/결론, 배경, 증례, 증례 보고, Cases, Backgrounds, Materials & Methods, Patients and methods, Case Report, Discussion, Conclusion, Conclussion 같은 섹션 라벨은 본문 첫머리에 보이도록 유지한다
 11. 세션/트랙 문자열에 O1~O6 또는 P1~P7 접두가 보이면 track 필드에 그대로 유지한다
 
 반환 형식 (JSON):
@@ -58,12 +59,17 @@ const PARSING_PROMPT = `
 주의사항:
 - 내용을 임의로 추가하거나 변경하지 마세요
 - 원문의 의미를 그대로 유지하세요
+- 본문의 단어, 문장, 문장 순서, 표현을 바꾸지 마세요
+- 요약, 재작성, 자연스러운 문장으로의 치환, 문체 교정은 금지입니다
+- 오탈자/띄어쓰기 수정도 원문 식별이 유지되는 최소 수준만 허용합니다
 - 한국어/영어 섞인 부분은 주언어에 따라 분류하세요
 - 국문 제목/저자/소속/본문은 titleKo, authorsKo, affiliationKo, koContent에만 넣으세요
 - 영문 제목/저자/소속/본문은 title, authors, institution, enContent에만 넣으세요
 - 한국어 본문이 끝난 뒤 영어 본문이 시작되는 문서는 두 본문을 절대 합치지 마세요
 - 저자 소속 번호나 기호를 임의로 삭제하거나 풀어쓰지 마세요
-- 목적, 방법, 결과, 결론, 서론, 증례, 고찰, Introduction, Methods, Results, Conclusion 같은 라벨은 문장 앞에 유지하세요
+- 목적, 방법, 결과, 결론, 배경, 서론, 증례, 증례 보고, 고찰, Cases, Backgrounds, Materials & Methods, Patients and methods, Introduction, Methods, Results, Conclusion, Conclussion, Case Report 같은 라벨은 문장 앞에 유지하세요
+- 본문이 이런 라벨로 시작하면 해당 라벨을 제목으로 오인하지 말고 반드시 본문 줄의 맨 앞에 남겨두세요
+- 여러 라벨이 함께 시작해도(예: "Backgrounds, Materials & Methods", "증례, 결론") 앞 라벨 문자열을 그대로 보존하세요
 - O1.Facial Deformity, O2.Oral Cancer & Reconstruction, O3.Oral Disease & Others, O4.Dental Implant, O5.TMJ, O6.Trauma & Dentoalveolar Surgery
 - P1.Oral Cancer & Pathology, P2.Trauma & Dentoalveolar Surgery, P3.Dental Implant, P4.Orthognathic & Esthetic Surgery, P5.Tissue Engineering & Reconstruction, P6.TMJ & Cleft Lip Palate, P7.Infection & Others
 - 빈 필드는 빈 문자열("")로 반환하세요
@@ -80,8 +86,8 @@ const trimParsedContent = (parsed: ParsedContent): ParsedContent => ({
   title: parsed.title?.trim() ?? '',
   authors: parsed.authors?.trim() ?? '',
   institution: parsed.institution?.trim() ?? '',
-  koContent: parsed.koContent?.trim() ?? '',
-  enContent: parsed.enContent?.trim() ?? '',
+  koContent: normalizeStructuredBodyText(parsed.koContent ?? ''),
+  enContent: normalizeStructuredBodyText(parsed.enContent ?? ''),
   captions: Array.isArray(parsed.captions) ? parsed.captions.map((caption) => caption.trim()).filter(Boolean) : [],
   images: Array.isArray(parsed.images) ? parsed.images.map((image) => image.trim()).filter(Boolean) : [],
 });
