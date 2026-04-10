@@ -68,6 +68,10 @@ const assetsCollection = (publicationId: string) =>
 
 const MAX_BATCH_OPS = 400;
 
+interface SavePublishingDocumentOptions {
+  persistGlobalMasters?: boolean;
+}
+
 const stripUndefinedDeep = <T,>(value: T): T => {
   if (Array.isArray(value)) {
     return value
@@ -87,6 +91,8 @@ const stripUndefinedDeep = <T,>(value: T): T => {
   return value;
 };
 
+const cloneDeep = <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
+
 export const loadPublishingDocument = async (publicationId: string) => {
   const [publicationSnap, metaSnap, masterLibrarySnap, pageSnaps, assetSnaps] = await Promise.all([
     getDoc(doc(db, 'publications', publicationId)),
@@ -105,11 +111,11 @@ export const loadPublishingDocument = async (publicationId: string) => {
   if (!metaSnap.exists()) {
     const initialDocument = createInitialPublishingDocument(publicationId);
     if (globalMasters) {
-      initialDocument.masters = globalMasters;
+      initialDocument.masters = cloneDeep(globalMasters);
       initialDocument.pages = initialDocument.pages.map((page) => ({
         ...page,
-        masterId: globalMasters.defaultMasterId,
-        zones: globalMasters.items.find((item) => item.id === globalMasters.defaultMasterId)?.contentZones.map((zone) => ({
+        masterId: initialDocument.masters.defaultMasterId,
+        zones: initialDocument.masters.items.find((item) => item.id === initialDocument.masters.defaultMasterId)?.contentZones.map((zone) => ({
           zoneId: zone.id,
           blocks: [],
         })) ?? [],
@@ -156,14 +162,14 @@ export const loadPublishingDocument = async (publicationId: string) => {
   }
   const pages = pageSnaps.docs.map((item) => item.data()) as PublishingDocument['pages'];
   const assets = assetSnaps.docs.map((item) => item.data()) as PublishingDocument['assets'];
-  const masters = globalMasters ?? meta.masters ?? createInitialPublishingDocument(publicationId).masters;
+  const masters = meta.masters ?? globalMasters ?? createInitialPublishingDocument(publicationId).masters;
 
   return migrateLegacyStarterDocument({
     id: publicationId,
     version: meta.version,
     meta: meta.meta,
     layout: meta.layout,
-    masters,
+    masters: cloneDeep(masters),
     pages,
     threads: meta.threads,
     contributions: meta.contributions ?? [],
@@ -172,7 +178,12 @@ export const loadPublishingDocument = async (publicationId: string) => {
   } satisfies PublishingDocument);
 };
 
-export const savePublishingDocument = async (publicationId: string, documentState: PublishingDocument) => {
+export const savePublishingDocument = async (
+  publicationId: string,
+  documentState: PublishingDocument,
+  options: SavePublishingDocumentOptions = {},
+) => {
+  const { persistGlobalMasters = false } = options;
   const [existingPages, existingAssets] = await Promise.all([
     getDocs(pagesCollection(publicationId)),
     getDocs(assetsCollection(publicationId)),
@@ -185,6 +196,7 @@ export const savePublishingDocument = async (publicationId: string, documentStat
     threads: documentState.threads,
     contributions: documentState.contributions,
     toc: documentState.toc,
+    masters: documentState.masters,
     updatedAt: new Date().toISOString(),
   };
   const masterLibrary: PublishingMasterLibraryDoc = {
@@ -199,9 +211,11 @@ export const savePublishingDocument = async (publicationId: string, documentStat
   operations.push((batch) => {
     batch.set(metaRef(publicationId), sanitizedMeta);
   });
-  operations.push((batch) => {
-    batch.set(masterLibraryRef(), sanitizedMasterLibrary);
-  });
+  if (persistGlobalMasters) {
+    operations.push((batch) => {
+      batch.set(masterLibraryRef(), sanitizedMasterLibrary);
+    });
+  }
 
   const nextPageIds = new Set(documentState.pages.map((page) => page.id));
   existingPages.docs.forEach((page) => {

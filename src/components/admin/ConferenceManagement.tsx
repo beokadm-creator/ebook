@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { collection, getDocs, addDoc, updateDoc, deleteDoc, doc, query, orderBy } from 'firebase/firestore';
+import { collection, getDocs, addDoc, updateDoc, doc, query, orderBy } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
+import { deleteConferenceCascade } from '@/lib/adminCleanup';
 import PublicationManagement from './PublicationManagement';
 import { Conference, BilingualValue } from '@/types/content';
 import { useBrandingStore } from '@/stores/brandingStore';
@@ -91,7 +92,7 @@ export const ConferenceManagement: React.FC = () => {
     if (!confirm('정말로 이 학술대회를 삭제하시겠습니까?')) return;
 
     try {
-      await deleteDoc(doc(db, 'conferences', id));
+      await deleteConferenceCascade(id);
       await loadConferences();
       showToast('프로젝트가 삭제되었습니다.', 'success');
     } catch (error) {

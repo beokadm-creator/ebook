@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { collection, getDocs, addDoc, updateDoc, doc, query, orderBy, writeBatch } from 'firebase/firestore';
+import { collection, getDocs, addDoc, updateDoc, doc, query, orderBy } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
+import { deletePublicationCascade } from '@/lib/adminCleanup';
 import { Publication, Conference, BilingualValue } from '@/types/content';
 import { showToast } from '@/components/common/Toast';
 import BilingualInput from '@/components/common/BilingualInput';
@@ -103,17 +104,7 @@ const PublicationManagement: React.FC<PublicationManagementProps> = ({ conferenc
   const handleDelete = async (id: string) => {
     if (!confirm('정말로 이 간행물을 삭제하시겠습니까? 연결된 문서 정보가 모두 사라집니다.')) return;
     try {
-      const editorDocs = await getDocs(collection(db, 'publications', id, 'editor'));
-      const editorPages = await getDocs(collection(db, 'publications', id, 'editorPages'));
-      const editorAssets = await getDocs(collection(db, 'publications', id, 'editorAssets'));
-      const batch = writeBatch(db);
-
-      editorDocs.docs.forEach((item) => batch.delete(item.ref));
-      editorPages.docs.forEach((item) => batch.delete(item.ref));
-      editorAssets.docs.forEach((item) => batch.delete(item.ref));
-      batch.delete(doc(db, 'publications', id));
-      await batch.commit();
-
+      await deletePublicationCascade(id);
       await loadData();
       showToast('간행물이 삭제되었습니다.', 'success');
     } catch (error) {

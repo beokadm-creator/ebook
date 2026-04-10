@@ -1120,15 +1120,25 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
   };
 
   const handleImportDocx = async (file: File) => {
-    if (!selectedPage) {
-      showToast('페이지를 먼저 선택하세요.', 'error');
-      return;
+    let currentPage = selectedPage;
+
+    if (!currentPage) {
+      // 페이지가 없으면 기본 마스터로 새 페이지를 자동 생성
+      addPage(document.masters.defaultMasterId);
+      const newPage = usePublishingStore.getState().document.pages.at(-1);
+      if (newPage) {
+        selectPage(newPage.id);
+        currentPage = newPage;
+      } else {
+        showToast('페이지 생성에 실패했습니다.', 'error');
+        return;
+      }
     }
 
     try {
       setImportingDocx(true);
       const parsed = await parseDocxManuscriptWithAI(file, useAIParsing);
-      const rootPageId = getChainRootPageId(document, selectedPage.id);
+      const rootPageId = getChainRootPageId(document, currentPage.id);
       const blankSelectedContribution =
         selectedContribution
         && selectedContribution.pageId === rootPageId
@@ -1186,12 +1196,22 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
   };
 
   const handleCreateSpeakerContribution = useCallback(() => {
-    if (!selectedPage) {
-      showToast('페이지를 먼저 선택하세요.', 'error');
-      return;
+    let currentPage = selectedPage;
+
+    if (!currentPage) {
+      // 페이지가 없으면 기본 마스터로 새 페이지를 자동 생성
+      addPage(document.masters.defaultMasterId);
+      const newPage = usePublishingStore.getState().document.pages.at(-1);
+      if (newPage) {
+        selectPage(newPage.id);
+        currentPage = newPage;
+      } else {
+        showToast('페이지 생성에 실패했습니다.', 'error');
+        return;
+      }
     }
 
-    const rootPageId = getChainRootPageId(document, selectedPage.id);
+    const rootPageId = getChainRootPageId(document, currentPage.id);
     const contributionId = createSpeakerContribution(rootPageId, pageMaster?.id);
     if (!contributionId) {
       showToast('새 발표자 스레드를 만들지 못했습니다.', 'error');
