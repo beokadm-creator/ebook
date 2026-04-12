@@ -22,6 +22,7 @@ export default defineConfig(({ command }) => ({
     }),
     VitePWA({
       registerType: 'autoUpdate',
+      selfDestroying: true,
       includeAssets: ['favicon.ico', 'robots.txt', 'apple-touch-icon.png'],
       manifest: {
         name: '학술회의 eBook 플랫폼',
