@@ -1,7 +1,7 @@
 import mammoth from 'mammoth';
 import { ContributionLanguage, ContributionSlotContent, TextRole } from '@/types/publishing';
 import { contentParser } from '../ai/contentParser';
-import { startsWithStructuredLabel } from './structuredLabels';
+import { normalizeAuthorText, startsWithStructuredLabel } from './structuredLabels';
 
 export interface ImportedSlotDraft {
   slotKey: string;
@@ -195,7 +195,9 @@ const buildContributionDraftFromSlots = (slots: ImportedSlotDraft[], sourceFileN
     .map((slot) => ({
       slotKey: slot.slotKey,
       label: slot.label,
-      text: slot.text.trim(),
+      text: (slot.slotKey === 'authors_ko' || slot.slotKey === 'authors_en') 
+        ? normalizeAuthorText(slot.text.trim()) 
+        : slot.text.trim(),
       role: slot.role,
       language: detectSlotLanguage(slot.slotKey),
     }));

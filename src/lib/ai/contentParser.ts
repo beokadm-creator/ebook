@@ -1,6 +1,6 @@
 import { glmClient } from './glmClient';
 import { ContributionLanguage, ContributionSlotContent, TextRole } from '@/types/publishing';
-import { normalizeStructuredBodyText } from '@/lib/publishing/structuredLabels';
+import { normalizeAuthorText, normalizeStructuredBodyText } from '@/lib/publishing/structuredLabels';
 
 export interface ParsedContent {
   track: string;
@@ -81,10 +81,10 @@ const trimParsedContent = (parsed: ParsedContent): ParsedContent => ({
   ...parsed,
   track: parsed.track?.trim() ?? '',
   titleKo: parsed.titleKo?.trim() ?? '',
-  authorsKo: parsed.authorsKo?.trim() ?? '',
+  authorsKo: normalizeAuthorText(parsed.authorsKo?.trim() ?? ''),
   affiliationKo: parsed.affiliationKo?.trim() ?? '',
   title: parsed.title?.trim() ?? '',
-  authors: parsed.authors?.trim() ?? '',
+  authors: normalizeAuthorText(parsed.authors?.trim() ?? ''),
   institution: parsed.institution?.trim() ?? '',
   koContent: normalizeStructuredBodyText(parsed.koContent ?? ''),
   enContent: normalizeStructuredBodyText(parsed.enContent ?? ''),
