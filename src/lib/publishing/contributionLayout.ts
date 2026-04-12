@@ -2,6 +2,9 @@ import { createMainBodyZone } from '@/lib/publishing/defaultDocument';
 import { ContributionItem, PublishingDocument } from '@/types/publishing';
 
 const FLOW_ROW_THRESHOLD_PX = 24;
+const DEFAULT_LAYOUT_RETRY_SCALES = [1, 0.82, 0.68] as const;
+const CJK_REGEX = /[\u1100-\u11ff\u3130-\u318f\uac00-\ud7af\u3040-\u30ff\u3400-\u9fff]/g;
+const LATIN_REGEX = /[A-Za-z]/g;
 
 export const sortFlowZonesForReadingOrder = <T extends { frame: { x: number; y: number } }>(zones: T[]) =>
   [...zones].sort((left, right) => {
@@ -128,10 +131,49 @@ const createThreadSegmentBlock = (
 const getContributionChainPages = (document: PublishingDocument, contributionPageId: string) =>
   document.pages.filter((page) => getChainRootPageId(document, page.id) === contributionPageId);
 
-const estimateCharsPerPage = (
+const countMatches = (value: string, pattern: RegExp) => value.match(pattern)?.length ?? 0;
+
+const getTextDensityProfile = (sampleText: string, slotKey: string) => {
+  const normalizedText = sampleText.trim();
+  const cjkCount = countMatches(normalizedText, CJK_REGEX);
+  const latinCount = countMatches(normalizedText, LATIN_REGEX);
+  const paragraphCount = Math.max(
+    1,
+    normalizedText
+      .split(/\n\s*\n/)
+      .map((paragraph) => paragraph.trim())
+      .filter(Boolean).length,
+  );
+
+  if (!normalizedText) {
+    return {
+      averageCharWidthEm: slotKey.includes('_en') ? 0.92 : 1.02,
+      fillRatio: slotKey.startsWith('body') ? 0.58 : 0.76,
+      paragraphPenalty: 0.96,
+    };
+  }
+
+  const totalMeasuredChars = Math.max(1, cjkCount + latinCount);
+  const cjkRatio = cjkCount / totalMeasuredChars;
+  const averageCharWidthEm = cjkRatio >= 0.45 ? 1.02 : 0.92;
+  const baseFillRatio = slotKey.startsWith('body')
+    ? (cjkRatio >= 0.45 ? 0.58 : 0.46)
+    : 0.78;
+  const paragraphPenalty = Math.max(0.72, 1 - (paragraphCount - 1) * 0.04);
+
+  return {
+    averageCharWidthEm,
+    fillRatio: baseFillRatio,
+    paragraphPenalty,
+  };
+};
+
+export const estimateCharsPerPage = (
   document: PublishingDocument,
   masterId: string,
   slotKey: string,
+  sampleText = '',
+  capacityScale = 1,
 ) => {
   const master = document.masters.items.find((item) => item.id === masterId);
   if (!master) {
@@ -145,10 +187,22 @@ const estimateCharsPerPage = (
   });
 
   const targetZones = zones.length ? zones : master.contentZones.filter((zone) => zone.kind === 'text-flow');
-  const area = targetZones.reduce((sum, zone) => sum + (zone.frame.width * zone.frame.height), 0);
-  const style = targetZones[0]?.style ?? createMainBodyZone().style;
-  const denominator = Math.max(1, style.fontSize * style.fontSize * style.lineHeight * 0.55);
-  return Math.max(900, Math.floor(area / denominator));
+  const fallbackStyle = targetZones[0]?.style ?? createMainBodyZone().style;
+  const fallbackPadding = targetZones[0]?.constraints.padding ?? createMainBodyZone().constraints.padding;
+  const density = getTextDensityProfile(sampleText, normalizedSlotKey);
+
+  const estimatedCapacity = targetZones.reduce((sum, zone) => {
+    const style = zone.style ?? fallbackStyle;
+    const padding = zone.constraints.padding ?? fallbackPadding;
+    const usableWidth = Math.max(48, zone.frame.width - padding.left - padding.right);
+    const usableHeight = Math.max(48, zone.frame.height - padding.top - padding.bottom);
+    const lineHeightPx = Math.max(1, style.fontSize * style.lineHeight);
+    const estimatedLineCount = Math.max(1, Math.floor(usableHeight / lineHeightPx));
+    const charsPerLine = Math.max(8, usableWidth / Math.max(1, style.fontSize * density.averageCharWidthEm));
+    return sum + Math.floor(estimatedLineCount * charsPerLine);
+  }, 0);
+
+  return Math.max(700, Math.floor(estimatedCapacity * density.fillRatio * density.paragraphPenalty * capacityScale));
 };
 
 const splitTextByCapacity = (text: string, capacity: number) => {
@@ -217,7 +271,42 @@ export const normalizeContributionOrder = (document: PublishingDocument) => {
   }));
 };
 
-export const rebuildContributionLayout = (
+interface RebuildContributionLayoutOptions {
+  capacityScale?: number;
+  maxRetries?: number;
+}
+
+const shouldRetryContributionLayout = (
+  document: PublishingDocument,
+  contribution: ContributionItem,
+  capacityScale: number,
+) => contribution.slots.some((slot) => {
+  const master = document.masters.items.find((item) => item.id === contribution.masterId);
+  if (master?.mode === 'speaker-thread') {
+    return false;
+  }
+
+  if (!slot.slotKey.startsWith('body') || !slot.text.trim()) {
+    return false;
+  }
+
+  const thread = findThreadForContributionSlot(document, contribution, slot.slotKey);
+  if (!thread || thread.zoneSequence.length > 1) {
+    return false;
+  }
+
+  const estimatedCapacity = estimateCharsPerPage(
+    document,
+    contribution.masterId,
+    slot.slotKey,
+    slot.text,
+    capacityScale,
+  );
+
+  return slot.text.trim().length > estimatedCapacity * 1.08;
+});
+
+const rebuildContributionLayoutOnce = (
   document: PublishingDocument,
   contribution: ContributionItem,
   createPageFromMaster: (
@@ -225,6 +314,7 @@ export const rebuildContributionLayout = (
     masterId: string,
     pageNumber: number,
   ) => PublishingDocument['pages'][number] | null,
+  options: RebuildContributionLayoutOptions = {},
 ) => {
   const master = document.masters.items.find((item) => item.id === contribution.masterId);
   const rootPage = document.pages.find((page) => page.id === contribution.pageId);
@@ -245,8 +335,31 @@ export const rebuildContributionLayout = (
     });
   });
 
+  const preservedRootBlocks = new Map(
+    rootPage.zones.map((zone) => [
+      zone.zoneId,
+      zone.blocks.filter((block) =>
+        block.type !== 'text'
+        || !contributionThreads.some((thread) => thread.id === block.flow.sourceThreadId),
+      ),
+    ]),
+  );
+  const validZoneIds = new Set(master.contentZones.map((zone) => zone.id));
+
   document.pages = document.pages.filter((page) => page.id === contribution.pageId || !chainPageIds.has(page.id));
-  rootPage.zones = master.contentZones.map((zone) => ({ zoneId: zone.id, blocks: [] }));
+  rootPage.zones = [
+    ...master.contentZones.map((zone) => ({
+      zoneId: zone.id,
+      blocks: preservedRootBlocks.get(zone.id) ?? [],
+    })),
+    ...rootPage.zones
+      .filter((zone) => !validZoneIds.has(zone.zoneId))
+      .map((zone) => ({
+        zoneId: zone.zoneId,
+        blocks: preservedRootBlocks.get(zone.zoneId) ?? [],
+      }))
+      .filter((zone) => zone.blocks.length > 0),
+  ];
 
   const pagesByOffset: PublishingDocument['pages'] = [rootPage];
   const ensurePageAtOffset = (offset: number) => {
@@ -290,40 +403,29 @@ export const rebuildContributionLayout = (
       thread.zoneSequence = [{ pageId: page.id, zoneId: startZoneId }];
     };
 
-    const renderBodyOnPageChain = (slot: ContributionItem['slots'][number], startOffset: number) => {
+    const renderBodyOnSinglePage = (slot: ContributionItem['slots'][number], pageOffset: number) => {
       const thread = findThreadForContributionSlot(document, contribution, slot.slotKey);
       const zone = findZoneForContributionSlot(document, contribution.masterId, slot.slotKey);
       if (!thread || !zone) {
         return 1;
       }
 
-      const startZoneId = getFlowStartZoneId(document, contribution.masterId, zone.id);
-      const capacity = estimateCharsPerPage(document, contribution.masterId, slot.slotKey);
-      const segments = splitTextByCapacity(slot.text, capacity);
-      thread.zoneSequence = [];
-
-      if (!segments.length) {
+      const page = ensurePageAtOffset(pageOffset);
+      if (!page) {
         return 1;
       }
 
-      segments.forEach((segmentText, index) => {
-        const page = ensurePageAtOffset(startOffset + index);
-        if (!page) {
-          return;
-        }
+      const startZoneId = getFlowStartZoneId(document, contribution.masterId, zone.id);
+      const pageZone = page.zones.find((item) => item.zoneId === startZoneId);
+      if (!pageZone) {
+        return 1;
+      }
 
-        const pageZone = page.zones.find((item) => item.zoneId === startZoneId);
-        if (!pageZone) {
-          return;
-        }
-
-        const block = createThreadSegmentBlock(thread, index, segmentText);
-        block.flow.isTerminal = index === segments.length - 1;
-        pageZone.blocks.push(block);
-        thread.zoneSequence.push({ pageId: page.id, zoneId: startZoneId });
-      });
-
-      return Math.max(1, segments.length);
+      const block = createThreadSegmentBlock(thread, 0, slot.text);
+      block.flow.isTerminal = true;
+      pageZone.blocks.push(block);
+      thread.zoneSequence = [{ pageId: page.id, zoneId: startZoneId }];
+      return 1;
     };
 
     const trackSlot = contribution.slots.find((slot) => slot.slotKey === 'track');
@@ -338,6 +440,10 @@ export const rebuildContributionLayout = (
     if (pageLanguages.length) {
       let currentOffset = 0;
 
+      if (trackSlot?.text.trim()) {
+        renderSlotOnPage(trackSlot, 0);
+      }
+
       pageLanguages.forEach((language) => {
         const pageOffset = currentOffset;
         const slots = language === 'ko' ? koSlots : enSlots;
@@ -345,12 +451,8 @@ export const rebuildContributionLayout = (
         const bodySlot = slots.find((slot) => slot.slotKey === bodySlotKey);
         const frontmatterSlots = slots.filter((slot) => slot.slotKey !== bodySlotKey);
 
-        if (trackSlot?.text.trim()) {
-          renderSlotOnPage(trackSlot, pageOffset);
-        }
-
         frontmatterSlots.forEach((slot) => renderSlotOnPage(slot, pageOffset));
-        const pagesConsumed = bodySlot ? renderBodyOnPageChain(bodySlot, pageOffset) : 1;
+        const pagesConsumed = bodySlot ? renderBodyOnSinglePage(bodySlot, pageOffset) : 1;
         currentOffset += pagesConsumed;
       });
 
@@ -394,7 +496,13 @@ export const rebuildContributionLayout = (
     }
 
     const startZoneId = getFlowStartZoneId(document, contribution.masterId, zone.id);
-    const capacity = estimateCharsPerPage(document, contribution.masterId, slot.slotKey);
+    const capacity = estimateCharsPerPage(
+      document,
+      contribution.masterId,
+      slot.slotKey,
+      slot.text,
+      options.capacityScale ?? 1,
+    );
     const segments = splitTextByCapacity(slot.text, capacity);
     thread.zoneSequence = [];
 
@@ -420,6 +528,71 @@ export const rebuildContributionLayout = (
     } else if (slotIndex < bodySlots.length - 1) {
       currentOffset += 1;
     }
+  });
+
+  normalizeContributionOrder(document);
+  return document;
+};
+
+export const rebuildContributionLayout = (
+  document: PublishingDocument,
+  contribution: ContributionItem,
+  createPageFromMaster: (
+    documentState: PublishingDocument,
+    masterId: string,
+    pageNumber: number,
+  ) => PublishingDocument['pages'][number] | null,
+  options: RebuildContributionLayoutOptions = {},
+) => {
+  const retryScales = DEFAULT_LAYOUT_RETRY_SCALES
+    .map((scale, index) => (index === 0 ? options.capacityScale ?? 1 : scale * (options.capacityScale ?? 1)))
+    .slice(0, Math.max(1, options.maxRetries ?? DEFAULT_LAYOUT_RETRY_SCALES.length));
+
+  retryScales.some((scale, attemptIndex) => {
+    rebuildContributionLayoutOnce(document, contribution, createPageFromMaster, { ...options, capacityScale: scale });
+    const needsRetry = shouldRetryContributionLayout(document, contribution, scale);
+
+    if (needsRetry && attemptIndex < retryScales.length - 1) {
+      console.warn(
+        `[pagination] retrying contribution layout for ${contribution.id} (${contribution.title || 'untitled'}) `
+        + `attempt ${attemptIndex + 2}/${retryScales.length}`,
+      );
+    } else if (needsRetry) {
+      console.warn(
+        `[pagination] contribution layout may still be incomplete for ${contribution.id} `
+        + `after ${retryScales.length} attempts`,
+      );
+    }
+
+    return !needsRetry;
+  });
+
+  return document;
+};
+
+export const rebuildAllContributionLayouts = (
+  document: PublishingDocument,
+  createPageFromMaster: (
+    documentState: PublishingDocument,
+    masterId: string,
+    pageNumber: number,
+  ) => PublishingDocument['pages'][number] | null,
+  options: RebuildContributionLayoutOptions = {},
+) => {
+  document.contributions.forEach((contribution) => {
+    const existingRootPage = document.pages.find((page) => page.id === contribution.pageId);
+    if (!existingRootPage) {
+      const rootPage = createPageFromMaster(document, contribution.masterId, document.pages.length + 1);
+      if (!rootPage) {
+        console.warn(`[pagination] missing master for contribution ${contribution.id}`);
+        return;
+      }
+
+      rootPage.id = contribution.pageId;
+      document.pages.push(rootPage);
+    }
+
+    rebuildContributionLayout(document, contribution, createPageFromMaster, options);
   });
 
   normalizeContributionOrder(document);

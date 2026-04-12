@@ -33,6 +33,16 @@ service cloud.firestore {
         allow write: if isAdmin();
       }
 
+      match /editorContributions/{contributionId} {
+        allow read: if true;
+        allow write: if isAdmin();
+      }
+
+      match /editorMasters/{masterId} {
+        allow read: if true;
+        allow write: if isAdmin();
+      }
+
       match /editorAssets/{assetId} {
         allow read: if true;
         allow write: if isAdmin();

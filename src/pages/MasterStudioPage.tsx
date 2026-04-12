@@ -2,7 +2,8 @@ import React, { Suspense, lazy, useCallback, useEffect, useRef, useState } from 
 import { useParams } from 'react-router-dom';
 import ProtectedRoute from '@/components/auth/ProtectedRoute';
 import { useAuth } from '@/contexts/AuthContext';
-import { loadPublishingDocument, savePublishingDocument } from '@/lib/publishing/firestore';
+import { loadPublishingDocument, loadPublishingThreads, saveMasterStudioWorkspaceDelta } from '@/lib/publishing/firestore';
+import { PublishingDocument } from '@/types/publishing';
 import { usePublishingStore } from '@/stores/publishingStore';
 import { showToast } from '@/components/common/Toast';
 import { logError } from '@/utils/errorHandler';
@@ -14,14 +15,17 @@ const MasterStudioPage: React.FC = () => {
   const { publicationId } = useParams<{ publicationId: string }>();
   const { user, role, loading: authLoading } = useAuth();
   const initialize = usePublishingStore((state) => state.initialize);
+  const loadThreads = usePublishingStore((state) => state.loadThreads);
   const documentState = usePublishingStore((state) => state.document);
   const historyRevision = usePublishingStore((state) => state.history.revision);
   const autosave = usePublishingStore((state) => state.autosave);
   const markSaving = usePublishingStore((state) => state.markSaving);
   const markSaved = usePublishingStore((state) => state.markSaved);
   const markSaveFailed = usePublishingStore((state) => state.markSaveFailed);
+  const isThreadsLoaded = usePublishingStore((state) => state.isThreadsLoaded);
   const [loading, setLoading] = useState(true);
   const saveTimer = useRef<number | null>(null);
+  const lastSavedDocumentRef = useRef<PublishingDocument | null>(null);
 
   const handleSaveMaster = useCallback(async () => {
     if (!publicationId || authLoading || !user || role !== 'admin') {
@@ -30,9 +34,11 @@ const MasterStudioPage: React.FC = () => {
 
     markSaving();
     try {
-      await savePublishingDocument(publicationId, usePublishingStore.getState().document, {
+      const currentDocument = usePublishingStore.getState().document;
+      await saveMasterStudioWorkspaceDelta(publicationId, lastSavedDocumentRef.current, currentDocument, {
         persistGlobalMasters: true,
       });
+      lastSavedDocumentRef.current = structuredClone(currentDocument);
       window.localStorage.removeItem(getDraftKey(publicationId));
       markSaved();
       showToast('마스터를 저장했습니다.', 'success');
@@ -53,7 +59,17 @@ const MasterStudioPage: React.FC = () => {
         setLoading(true);
         const document = await loadPublishingDocument(publicationId);
         initialize(document);
+        lastSavedDocumentRef.current = structuredClone(document);
         window.localStorage.removeItem(getDraftKey(publicationId));
+
+        // lazy load threads
+        loadPublishingThreads(publicationId).then((threads) => {
+          if (threads.length > 0) {
+            loadThreads(threads);
+            lastSavedDocumentRef.current!.threads = structuredClone(threads);
+          }
+        }).catch(err => logError(err, 'MasterStudio-load-threads'));
+
       } catch (error) {
         logError(error, 'MasterStudio-load');
         const rawDraft = window.localStorage.getItem(getDraftKey(publicationId));
@@ -76,7 +92,7 @@ const MasterStudioPage: React.FC = () => {
   }, [authLoading, initialize, publicationId, role, user]);
 
   useEffect(() => {
-    if (!publicationId || authLoading || !user || role !== 'admin' || loading || !autosave.dirty) {
+    if (!publicationId || authLoading || !user || role !== 'admin' || loading || !autosave.dirty || !isThreadsLoaded) {
       return;
     }
 
@@ -86,8 +102,9 @@ const MasterStudioPage: React.FC = () => {
 
     saveTimer.current = window.setTimeout(() => {
       markSaving();
-      void savePublishingDocument(publicationId, documentState, { persistGlobalMasters: true })
+      void saveMasterStudioWorkspaceDelta(publicationId, lastSavedDocumentRef.current, documentState, { persistGlobalMasters: true })
         .then(() => {
+          lastSavedDocumentRef.current = structuredClone(documentState);
           window.localStorage.removeItem(getDraftKey(publicationId));
           markSaved();
         })
@@ -103,7 +120,7 @@ const MasterStudioPage: React.FC = () => {
         window.clearTimeout(saveTimer.current);
       }
     };
-  }, [authLoading, autosave.dirty, documentState, historyRevision, loading, markSaveFailed, markSaved, markSaving, publicationId, role, user]);
+  }, [authLoading, autosave.dirty, documentState, historyRevision, loading, markSaveFailed, markSaved, markSaving, publicationId, role, user, isThreadsLoaded]);
 
   if (!publicationId) {
     return <div className="p-8 text-center text-red-600">간행물 ID가 없습니다.</div>;

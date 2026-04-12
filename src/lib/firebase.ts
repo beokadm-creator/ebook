@@ -5,6 +5,10 @@ import { getStorage, connectStorageEmulator } from 'firebase/storage';
 import { getFunctions, connectFunctionsEmulator } from 'firebase/functions';
 import { logger } from './logger';
 
+const env = ((import.meta as ImportMeta & {
+  env?: Record<string, string | boolean | undefined>;
+}).env ?? {}) as Record<string, string | boolean | undefined>;
+
 const normalizeStorageBucket = (value?: string) => {
   if (!value) {
     return '';
@@ -22,19 +26,19 @@ const requiredFirebaseEnvKeys = [
   'VITE_FIREBASE_APP_ID',
 ] as const;
 
-const missingFirebaseEnvKeys = requiredFirebaseEnvKeys.filter((key) => !import.meta.env[key]);
+const missingFirebaseEnvKeys = requiredFirebaseEnvKeys.filter((key) => !env[key]);
 
 if (missingFirebaseEnvKeys.length > 0) {
   logger.warn(`[firebase] missing env: ${missingFirebaseEnvKeys.join(', ')}`);
 }
 
 const firebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
-  storageBucket: normalizeStorageBucket(import.meta.env.VITE_FIREBASE_STORAGE_BUCKET),
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
-  appId: import.meta.env.VITE_FIREBASE_APP_ID
+  apiKey: typeof env.VITE_FIREBASE_API_KEY === 'string' ? env.VITE_FIREBASE_API_KEY : '',
+  authDomain: typeof env.VITE_FIREBASE_AUTH_DOMAIN === 'string' ? env.VITE_FIREBASE_AUTH_DOMAIN : '',
+  projectId: typeof env.VITE_FIREBASE_PROJECT_ID === 'string' ? env.VITE_FIREBASE_PROJECT_ID : '',
+  storageBucket: normalizeStorageBucket(typeof env.VITE_FIREBASE_STORAGE_BUCKET === 'string' ? env.VITE_FIREBASE_STORAGE_BUCKET : ''),
+  messagingSenderId: typeof env.VITE_FIREBASE_MESSAGING_SENDER_ID === 'string' ? env.VITE_FIREBASE_MESSAGING_SENDER_ID : '',
+  appId: typeof env.VITE_FIREBASE_APP_ID === 'string' ? env.VITE_FIREBASE_APP_ID : ''
 };
 
 // Firebase 초기화 (중복 방지)
@@ -47,7 +51,7 @@ export const storage = getStorage(app);
 export const functions = getFunctions(app);
 
 // 개발 환경에서 Emulator 연결
-if (import.meta.env.DEV && import.meta.env.VITE_FIREBASE_USE_EMULATOR === 'true') {
+if (env.DEV && env.VITE_FIREBASE_USE_EMULATOR === 'true') {
   // Firestore Emulator
   try {
     connectFirestoreEmulator(db, 'localhost', 8080);
