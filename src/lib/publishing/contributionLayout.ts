@@ -400,8 +400,14 @@ const rebuildContributionLayoutOnce = (
         return;
       }
 
+      // Prevent duplicate rendering of the same thread on the same page
+      if (pageZone.blocks.some((b) => b.type === 'text' && b.flow.sourceThreadId === thread.id)) {
+        return;
+      }
+
       const segmentRuns = splitRunsByTexts(thread.canonicalText, [slot.text]);
-      const block = createThreadSegmentBlock(thread, 0, segmentRuns[0] ?? thread.canonicalText);
+      const segmentIndex = isCommon ? thread.zoneSequence.length : 0;
+      const block = createThreadSegmentBlock(thread, segmentIndex, segmentRuns[0] ?? thread.canonicalText);
       pageZone.blocks.push(block);
       
       if (isCommon) {
@@ -429,6 +435,11 @@ const rebuildContributionLayoutOnce = (
         return 1;
       }
 
+      // Check if block for this thread already exists on this page to prevent duplicate rendering
+      if (pageZone.blocks.some((b) => b.type === 'text' && b.flow.sourceThreadId === thread.id)) {
+        return 1;
+      }
+
       const segmentRuns = splitRunsByTexts(thread.canonicalText, [slot.text]);
       const block = createThreadSegmentBlock(thread, 0, segmentRuns[0] ?? thread.canonicalText);
       block.flow.isTerminal = true;
@@ -453,6 +464,13 @@ const rebuildContributionLayoutOnce = (
         const thread = findThreadForContributionSlot(document, contribution, slot.slotKey);
         if (thread) {
           thread.zoneSequence = [];
+          
+          // Clean up existing common blocks from all pages to prevent duplication
+          pagesByOffset.forEach(page => {
+            page.zones.forEach(zone => {
+              zone.blocks = zone.blocks.filter(b => b.type !== 'text' || b.flow.sourceThreadId !== thread.id);
+            });
+          });
         }
       });
 
@@ -462,12 +480,33 @@ const rebuildContributionLayoutOnce = (
         const bodySlotKey = language === 'ko' ? 'body_ko' : 'body_en';
         const bodySlot = slots.find((slot) => slot.slotKey === bodySlotKey);
         const frontmatterSlots = slots.filter((slot) => slot.slotKey !== bodySlotKey);
+        
+        // Clean up existing language blocks from this page to prevent duplication
+        const page = ensurePageAtOffset(pageOffset);
+        if (page) {
+          slots.forEach(slot => {
+            const thread = findThreadForContributionSlot(document, contribution, slot.slotKey);
+            if (thread) {
+              page.zones.forEach(zone => {
+                zone.blocks = zone.blocks.filter(b => b.type !== 'text' || b.flow.sourceThreadId !== thread.id);
+              });
+            }
+          });
+        }
 
         commonSlots.forEach((slot) => renderSlotOnPage(slot, pageOffset, true));
         frontmatterSlots.forEach((slot) => renderSlotOnPage(slot, pageOffset));
         const pagesConsumed = bodySlot ? renderBodyOnSinglePage(bodySlot, pageOffset) : 1;
         currentOffset += pagesConsumed;
       });
+
+      // After rendering, clean up any extra overflow pages that might have been left behind from a previous layout
+      const usedPageIds = pagesByOffset.slice(0, currentOffset).map(p => p.id);
+      const allContributionPageIds = pagesByOffset.map(p => p.id);
+      
+      document.pages = document.pages.filter(p => 
+        !allContributionPageIds.includes(p.id) || usedPageIds.includes(p.id)
+      );
 
       normalizeContributionOrder(document);
       return document;
@@ -521,6 +560,13 @@ const rebuildContributionLayoutOnce = (
     const segmentRuns = splitRunsByTexts(thread.canonicalText, segments);
     thread.zoneSequence = [];
 
+    // Clean up existing blocks for this thread across all pages
+    pagesByOffset.forEach(page => {
+      page.zones.forEach(pageZone => {
+        pageZone.blocks = pageZone.blocks.filter(b => b.type !== 'text' || b.flow.sourceThreadId !== thread.id);
+      });
+    });
+
     segments.forEach((segmentText, index) => {
       const pageOffset = currentOffset + index;
       const page = ensurePageAtOffset(pageOffset);
@@ -544,6 +590,14 @@ const rebuildContributionLayoutOnce = (
       currentOffset += 1;
     }
   });
+
+  // After rendering, clean up any extra overflow pages that might have been left behind from a previous layout
+  const usedPageIds = pagesByOffset.slice(0, currentOffset === 0 ? 1 : currentOffset).map(p => p.id);
+  const allContributionPageIds = pagesByOffset.map(p => p.id);
+  
+  document.pages = document.pages.filter(p => 
+    !allContributionPageIds.includes(p.id) || usedPageIds.includes(p.id)
+  );
 
   normalizeContributionOrder(document);
   return document;

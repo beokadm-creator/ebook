@@ -1089,7 +1089,7 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
     closeTextModal();
   };
 
-  const handleImportDocx = async (file: File) => {
+  const handleImportDocx = async (file: File, mode: 'new' | 'merge' = 'new') => {
     let currentPage = selectedPage;
 
     if (!currentPage) {
@@ -1117,9 +1117,21 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
 
       // AI 파싱이 성공한 경우
       if (parsed.contributionDraft.slots.length > 0) {
-        if (blankSelectedContribution) {
+        if (mode === 'merge' && selectedContribution && selectedContribution.pageId === rootPageId) {
           parsed.contributionDraft.slots.forEach((slot) => {
-            updateContributionSlotText(selectedContribution.id, slot.slotKey, slot.text);
+            const existing = selectedContribution!.slots.find((s) => s.slotKey === slot.slotKey);
+            if (slot.text.trim() && (!existing || !existing.text.trim())) {
+              updateContributionSlotText(selectedContribution!.id, slot.slotKey, slot.text);
+            }
+          });
+          applied = parsed.contributionDraft.slots.length;
+          showToast(`발표자 원고 ${parsed.contributionDraft.title} 병합 완료`, 'success');
+          return;
+        }
+
+        if (blankSelectedContribution && mode === 'new') {
+          parsed.contributionDraft.slots.forEach((slot) => {
+            updateContributionSlotText(selectedContribution!.id, slot.slotKey, slot.text);
           });
           applied = parsed.contributionDraft.slots.length;
           showToast(`발표자 원고 ${parsed.contributionDraft.title} 반영 완료`, 'success');
@@ -1648,22 +1660,42 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
                 텍스트 넣기
               </button>
             ) : null}
-            <label className={`rounded-2xl ${isSpeakerThreadPage ? 'bg-white text-slate-900' : 'border border-white/20 text-white'} px-4 py-3 text-sm font-semibold ${importingDocx ? 'cursor-wait opacity-60' : 'cursor-pointer'}`}>
-              원고 가져오기
-              <input
-                type="file"
-                accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                className="hidden"
-                disabled={importingDocx}
-                onChange={(event) => {
-                  const file = event.target.files?.[0];
-                  if (file) {
-                    void handleImportDocx(file);
-                  }
-                  event.target.value = '';
-                }}
-              />
-            </label>
+            <div className="flex gap-2">
+              <label className={`flex-1 rounded-2xl ${isSpeakerThreadPage ? 'bg-white text-slate-900' : 'border border-white/20 text-white'} px-4 py-3 text-sm font-semibold text-center ${importingDocx ? 'cursor-wait opacity-60' : 'cursor-pointer'}`}>
+                새 원고 추가
+                <input
+                  type="file"
+                  accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                  className="hidden"
+                  disabled={importingDocx}
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    if (file) {
+                      void handleImportDocx(file, 'new');
+                    }
+                    event.target.value = '';
+                  }}
+                />
+              </label>
+              {isSpeakerThreadPage ? (
+                <label className={`flex-1 rounded-2xl border border-white/20 text-white px-4 py-3 text-sm font-semibold text-center ${importingDocx || !selectedContribution ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}>
+                  현재 원고에 병합
+                  <input
+                    type="file"
+                    accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                    className="hidden"
+                    disabled={importingDocx || !selectedContribution}
+                    onChange={(event) => {
+                      const file = event.target.files?.[0];
+                      if (file) {
+                        void handleImportDocx(file, 'merge');
+                      }
+                      event.target.value = '';
+                    }}
+                  />
+                </label>
+              ) : null}
+            </div>
             <button
               type="button"
               onClick={() => {
@@ -2074,7 +2106,7 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
           </button>
         </div>
 
-        <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_320px]">
+        <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_480px]">
           <section className="overflow-auto rounded-[32px] border border-slate-200 bg-[#ece6da] px-6 py-8">
             {isSpeakerThreadPage ? (
               <div className="space-y-8">
