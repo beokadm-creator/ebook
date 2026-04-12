@@ -9,16 +9,16 @@ import {
 } from '@heroicons/react/24/outline';
 import { getRenderableImageUrl, uploadMasterImage, uploadPublicationImage } from '@/lib/publishing/assets';
 import { formatMm, getPxPerMm, pxToMm } from '@/lib/publishing/a4';
-import { getChainRootPageId, inferZoneSlotKey } from '@/lib/publishing/contributionLayout';
+import { findThreadForContributionSlot, getChainRootPageId, inferZoneSlotKey } from '@/lib/publishing/contributionLayout';
 import { getThreadPlainText } from '@/lib/publishing/defaultDocument';
 import { parseDocxManuscriptWithAI } from '@/lib/publishing/docxImport';
 import { glmClient } from '@/lib/ai/glmClient';
 import { downloadPagesAsPdf } from '@/lib/publishing/pdf';
 import { TEMPLATE_PRESET_DESCRIPTIONS, TEMPLATE_PRESET_LABELS, TemplatePresetKey } from '@/lib/publishing/templatePresets';
-import { renderRunsToReact } from '@/lib/publishing/richText';
+import { mergeAdjacentRuns, renderRunsToReact } from '@/lib/publishing/richText';
 import { showToast } from '@/components/common/Toast';
 import { usePublishingStore } from '@/stores/publishingStore';
-import { ElementScope, MasterTemplate, PageBlock, PublicationPage, PublishingDocument, TextRole, ZoneKind } from '@/types/publishing';
+import { ElementScope, MasterTemplate, PageBlock, PublicationPage, PublishingDocument, TextRole, TextRun, ZoneKind } from '@/types/publishing';
 import { logError } from '@/utils/errorHandler';
 import FlowGroupContainer from './FlowGroupContainer';
 import SpeakerContributionPanel from './SpeakerContributionPanel';
@@ -831,6 +831,7 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
     addContribution,
     createSpeakerContribution,
     updateContributionSlotText,
+    updateContributionSlotRuns,
     updateContributionPresentationTrack,
     updateContributionStatus,
     moveContribution,
@@ -868,11 +869,10 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
   const [testingAI, setTestingAI] = useState(false);
   const [editingContributionSlot, setEditingContributionSlot] = useState<string | null>(null);
   const [editingContributionValue, setEditingContributionValue] = useState('');
+  const [editingContributionRuns, setEditingContributionRuns] = useState<TextRun[]>([{ text: '' }]);
   const pageRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const pdfPageRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const measurementRootRef = useRef<HTMLDivElement | null>(null);
-
-
 
   const selectedPage = document.pages.find((item) => item.id === selection.pageId) ?? document.pages[1] ?? document.pages[0];
   const pageMaster = document.masters.items.find((item) => item.id === selectedPage?.masterId) ?? document.masters.items[0];
@@ -890,6 +890,18 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
 
     return document.pages.filter((page) => getChainRootPageId(document, page.id) === selectedContribution.pageId);
   }, [document, selectedContribution, selectedPage]);
+  const selectedContributionSlotRuns = useMemo(() => {
+    if (!selectedContribution) {
+      return {};
+    }
+
+    return Object.fromEntries(
+      selectedContribution.slots.map((slot) => {
+        const thread = findThreadForContributionSlot(document, selectedContribution, slot.slotKey);
+        return [slot.slotKey, thread?.canonicalText?.length ? thread.canonicalText : [{ text: slot.text || '' }]];
+      }),
+    ) as Record<string, TextRun[]>;
+  }, [document, selectedContribution]);
   const presentationTrackById = useMemo(
     () => new Map((document.meta.presentationTracks ?? []).map((track) => [track.id, track])),
     [document.meta.presentationTracks],
@@ -1238,9 +1250,10 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
     }
   };
 
-  const handleStartContributionSlotEdit = useCallback((slotKey: string, value: string) => {
+  const handleStartContributionSlotEdit = useCallback((slotKey: string, runs: TextRun[]) => {
     setEditingContributionSlot(slotKey);
-    setEditingContributionValue(value);
+    setEditingContributionValue(runs.map((run) => run.text).join(''));
+    setEditingContributionRuns(mergeAdjacentRuns(runs));
   }, []);
 
   const handleSaveContributionSlotEdit = useCallback(() => {
@@ -1248,11 +1261,23 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
       return;
     }
 
-    updateContributionSlotText(selectedContribution.id, editingContributionSlot, editingContributionValue);
+    if (editingContributionSlot.startsWith('body')) {
+      updateContributionSlotRuns(selectedContribution.id, editingContributionSlot, editingContributionRuns);
+    } else {
+      updateContributionSlotText(selectedContribution.id, editingContributionSlot, editingContributionValue);
+    }
     setEditingContributionSlot(null);
     setEditingContributionValue('');
+    setEditingContributionRuns([{ text: '' }]);
     showToast('발표자 원고 슬롯을 수정했습니다.', 'success');
-  }, [editingContributionSlot, editingContributionValue, selectedContribution, updateContributionSlotText]);
+  }, [
+    editingContributionRuns,
+    editingContributionSlot,
+    editingContributionValue,
+    selectedContribution,
+    updateContributionSlotRuns,
+    updateContributionSlotText,
+  ]);
 
   const handleCompleteContribution = useCallback(() => {
     if (!selectedContribution) {
@@ -2823,6 +2848,8 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
                 onChangePresentationTrack={handlePresentationTrackChange}
                 editingSlotKey={editingContributionSlot}
                 editingValue={editingContributionValue}
+                editingRuns={editingContributionRuns}
+                slotRunsByKey={selectedContributionSlotRuns}
                 onSelectContribution={selectPage}
                 onMoveContribution={moveContribution}
                 onDeleteContribution={(contributionId) => {
@@ -2831,10 +2858,12 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
                 }}
                 onStartEditSlot={handleStartContributionSlotEdit}
                 onEditingValueChange={setEditingContributionValue}
+                onEditingRunsChange={setEditingContributionRuns}
                 onSaveSlot={handleSaveContributionSlotEdit}
                 onCancelSlot={() => {
                   setEditingContributionSlot(null);
                   setEditingContributionValue('');
+                  setEditingContributionRuns([{ text: '' }]);
                 }}
               />
             ) : null}
