@@ -1,5 +1,6 @@
 import { getChainRootPageId, inferZoneSlotKey } from '@/lib/publishing/contributionLayout';
 import { PublishingDocument } from '@/types/publishing';
+import { parseAuthorTextToRuns } from '@/lib/publishing/structuredLabels';
 
 export type StoredThread = PublishingDocument['threads'][number] & {
   canonicalText?: PublishingDocument['threads'][number]['canonicalText'];
@@ -37,6 +38,17 @@ export const rehydrateContributionThreadText = (
     return thread as PublishingDocument['threads'][number];
   }
 
+  const rootPageId = getChainRootPageId(documentState, thread.sourcePageId);
+  const contribution = documentState.contributions.find((item) => item.pageId === rootPageId);
+  let slotKey = null;
+  if (contribution) {
+    const sourcePage = documentState.pages.find((page) => page.id === rootPageId) ?? documentState.pages.find((page) => page.id === thread.sourcePageId);
+    const masterId = sourcePage?.masterId ?? contribution.masterId;
+    const master = documentState.masters.items.find((item) => item.id === masterId);
+    const zone = master?.contentZones.find((item) => item.id === thread.sourceZoneId);
+    slotKey = inferZoneSlotKey(zone);
+  }
+
   const slotText = findContributionSlotTextForThread(documentState, thread);
   if (slotText == null) {
     return {
@@ -45,9 +57,11 @@ export const rehydrateContributionThreadText = (
     } as PublishingDocument['threads'][number];
   }
 
+  const isAuthor = slotKey === 'authors_ko' || slotKey === 'authors_en';
+
   return {
     ...thread,
-    canonicalText: [{ text: slotText }],
+    canonicalText: isAuthor ? parseAuthorTextToRuns(slotText) : [{ text: slotText }],
   } as PublishingDocument['threads'][number];
 });
 
@@ -55,7 +69,7 @@ export const compactContributionThreadText = (documentState: PublishingDocument)
   documentState.threads.map((thread) => {
     const slotText = findContributionSlotTextForThread(documentState, thread);
     const threadText = thread.canonicalText.map((run) => run.text).join('');
-    const hasRichMarks = thread.canonicalText.some((run) => Boolean(run.marks?.bold || run.marks?.italic || run.marks?.underline));
+    const hasRichMarks = thread.canonicalText.some((run) => Boolean(run.marks?.bold || run.marks?.italic || run.marks?.underline || run.marks?.superscript));
 
     if (slotText == null || threadText !== slotText || hasRichMarks) {
       return thread;

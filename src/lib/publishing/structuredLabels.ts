@@ -1,3 +1,5 @@
+import { TextRun } from '@/types/publishing';
+
 const STRUCTURED_LABEL_TERMS = [
   '문헌 고찰 및 결론',
   '문헌 고찰',
@@ -94,20 +96,28 @@ export const normalizeStructuredBodyText = (text: string) =>
     })
     .join('\n');
 
-const SUPERSCRIPT_MAP: Record<string, string> = {
-  '0': '⁰', '1': '¹', '2': '²', '3': '³', '4': '⁴',
-  '5': '⁵', '6': '⁶', '7': '⁷', '8': '⁸', '9': '⁹',
-  ',': '⸴', // 위첨자 쉼표 (Raised Comma U+2E14)
-  '-': '⁻', // 위첨자 하이픈
-  '*': 'ˣ', // 위첨자 별표
-  ')': '⁾'  // 위첨자 닫는 괄호
+export const normalizeAuthorText = (text: string) => {
+  return text; // we no longer use unicode superscript characters for authors, we will use HTML tags or text marks.
 };
 
-export const normalizeAuthorText = (text: string) => {
+export const parseAuthorTextToRuns = (text: string): TextRun[] => {
   const affiliationBlockRegex = /([0-9]+(?:[\s,*-]+[0-9]+)*[\s*)]*)/g;
-  
-  return text.replace(affiliationBlockRegex, (match) => {
-    return match.replace(/[0-9,\-*\)]/g, (char) => SUPERSCRIPT_MAP[char] || char);
+  const runs: TextRun[] = [];
+  let lastIndex = 0;
+
+  text.replace(affiliationBlockRegex, (match, _p1, offset) => {
+    if (offset > lastIndex) {
+      runs.push({ text: text.slice(lastIndex, offset) });
+    }
+    runs.push({ text: match, marks: { superscript: true } });
+    lastIndex = offset + match.length;
+    return match;
   });
+
+  if (lastIndex < text.length) {
+    runs.push({ text: text.slice(lastIndex) });
+  }
+
+  return runs.length ? runs : [{ text: '' }];
 };
 

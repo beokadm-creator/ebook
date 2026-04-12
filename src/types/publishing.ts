@@ -157,6 +157,7 @@ export interface TextMarkSet {
   bold?: boolean;
   italic?: boolean;
   underline?: boolean;
+  superscript?: boolean;
 }
 
 export interface TextRun {

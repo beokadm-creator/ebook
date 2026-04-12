@@ -1,0 +1,113 @@
+[start] 2026-04-11T13:48:40.141Z
+[config] publication=xqnmUaFi0eiFXqy9km8x
+[load] reading publications/xqnmUaFi0eiFXqy9km8x/editor/state
+[load] threads=408, contributions=48, masters=1
+[load] defaultMasterId=master_1775811339158_wmuui1
+[build] seeded 48 root pages
+[build] 1/48 contribution_1775880366713_juwnhd
+[build] 2/48 contribution_1775877440952_ofylla
+[build] 3/48 contribution_1775877637753_dxoxfw
+[build] 4/48 contribution_1775877741359_5mdbxe
+[build] 5/48 contribution_1775877890776_z16px4
+[build] 6/48 contribution_1775877995959_1zed3s
+[build] 7/48 contribution_1775878444675_wfr2ge
+[build] 8/48 contribution_1775878686063_ni1yxd
+[build] 9/48 contribution_1775878936100_vcyddz
+[build] 10/48 contribution_1775879079606_4z8crv
+[build] 11/48 contribution_1775879410951_ho2ds3
+[build] 12/48 contribution_1775879674520_5dwpo5
+[build] 13/48 contribution_1775879827786_i87r40
+[build] 14/48 contribution_1775880289826_hz1ai2
+[build] 15/48 contribution_1775880687165_yblyfv
+[build] 16/48 contribution_1775880934661_7i2zzd
+[build] 17/48 contribution_1775881059828_vbpw9d
+[build] 18/48 contribution_1775881137681_jdkdrs
+[build] 19/48 contribution_1775881218004_33p7z4
+[build] 20/48 contribution_1775881330403_ubxt2n
+[build] 21/48 contribution_1775881488219_ldmhoz
+[build] 22/48 contribution_1775882570189_0o4t2u
+[build] 23/48 contribution_1775882781366_3didjx
+[build] 24/48 contribution_1775883083596_gof8ni
+[build] 25/48 contribution_1775883138444_65ibs0
+[build] 26/48 contribution_1775883426904_x3c65i
+[build] 27/48 contribution_1775883557026_yakdbl
+[build] 28/48 contribution_1775883901725_8o62aj
+[build] 29/48 contribution_1775884418907_iysfve
+[build] 30/48 contribution_1775884375339_thxubx
+[build] 31/48 contribution_1775884672140_ic19o4
+[build] 32/48 contribution_1775884923569_xlktoz
+[build] 33/48 contribution_1775886491432_22ao9f
+[build] 34/48 contribution_1775887026790_jck597
+[build] 35/48 contribution_1775887271037_fsidli
+[build] 36/48 contribution_1775887583742_yyj8pk
+[build] 37/48 contribution_1775887910710_ln8po8
+[build] 38/48 contribution_1775888084698_cjisww
+[build] 39/48 contribution_1775888363468_hur8ef
+[build] 40/48 contribution_1775888475789_15l7ct
+[build] 41/48 contribution_1775888576687_07vamq
+[build] 42/48 contribution_1775888875403_gka512
+[build] 43/48 contribution_1775888937140_jziu9g
+[build] 44/48 contribution_1775889127249_09jywp
+[build] 45/48 contribution_1775889262316_box3q1
+[build] 46/48 contribution_1775889314781_gf3sx0
+[build] 47/48 contribution_1775889706180_aq8tfa
+[build] 48/48 contribution_1775889926603_ul0ich
+[build] total pages after layout=185
+[validate] duplicate thread segment placements=0
+[validate] empty pages=0
+[validate] wrong zone placements=0
+[validate] chain issues=0
+[validate] body coverage={"body_ko":{"total":48,"multiPage":18,"singlePageOrMissing":30},"body_en":{"total":48,"multiPage":46,"singlePageOrMissing":2}}
+[pages-per-contribution]
+01. contribution_1775880366713_juwnhd | 2 pages | Two-stage mandibular setback using a modified Dingman's mandibular body osteotomy with step for large antero-posterior orthognathic surgery: a report of two cases
+02. contribution_1775877440952_ofylla | 2 pages | A retrospective review of sagittal split ramus osteotomy: incidence and risk factors for neurosensory disturbance of the inferior alveolar nerve
+03. contribution_1775877637753_dxoxfw | 5 pages | 술후 반흔 최소화를 위해 비순구 접근을 이용한 광대부 지방종 제거: 증례 보고
+04. contribution_1775877741359_5mdbxe | 4 pages | Class III 부정교합 한국 성인에서 Bimaxillary orthognathic surgery 후 Masseter 및 Medial pterygoid muscle morphology 변화가 Skeletal stability에 미치는 영향
+05. contribution_1775877890776_z16px4 | 4 pages | 하악 시상분할 골절단술에서 의도적인 근위 골편 내측 이동을 통해 하안면 폭경을 감소시킨 환자의 술후 안정성
+06. contribution_1775877995959_1zed3s | 3 pages | 르포트 1형 골절단술 후 상악 중절치 및 전비극 위치 변화와 상순, 인중 길이 변화의 상관관계: 3D 안면 스캐너 분석
+07. contribution_1775878444675_wfr2ge | 3 pages | Intersegmental Gap 크기에 따른 Z-plate 추가 고정이 BSSRO 후 하악 안정성에 미치는 영향: 3차원 비교 연구
+08. contribution_1775878686063_ni1yxd | 3 pages | 골덴하르 증후군 환아의 상기도 폐쇄에 대한 Oral Airway Plate(OAP) 장치 적용 증례 보고
+09. contribution_1775878936100_vcyddz | 5 pages | 일차 구개성형술 시 유경 협지방체 이식술이 구강비강누공 및 비인강 폐쇄 부전 발생에 미치는 영향: 후향적 코호트 연구
+10. contribution_1775879079606_4z8crv | 6 pages | 소아 두개안면 증후군 환자에서 하악 골신장술 시 견인 벡터에 따른 3차원 기도 확장 효과에 관한 연구
+11. contribution_1775879410951_ho2ds3 | 2 pages | Mandibular arc shape evaluation of mandibular asymmetry: a new classification and three-dimensional cephalometric analysis
+12. contribution_1775879674520_5dwpo5 | 3 pages | Use Customized Three-Dimensionally Printed Mandible Prostheses with Pressure Reducing Device: A Finite Element Analysis, Biomechanical Testing, Animal and Human Study
+13. contribution_1775879827786_i87r40 | 3 pages | 방사선 골괴사로 오인된 하악골 편평상피세포암의 재발: 증례 보고
+14. contribution_1775880289826_hz1ai2 | 4 pages | 하악골 법랑모세포종 적출술 후 발생한 안면 지방위축증의 재건을 위한 협지방 패드 유리 이식술: 증례 보고
+15. contribution_1775880687165_yblyfv | 4 pages | 반복 발생한 구강 편평세포암에서 병리학적 고위험 소견으로의 전환 분석
+16. contribution_1775880934661_7i2zzd | 5 pages | 구강암 환자에서 하악 변연절제술 후 병적 하악골 골절의 예측인자 및 임상 위험 지수 개발
+17. contribution_1775881059828_vbpw9d | 2 pages | 조혈모세포 이식 후 이식편대숙주질환과 연관되어 상악 치은, 하악 치은, 협점막에 동시 발생한 3개의 편평세포암종에 대한 증례보고
+18. contribution_1775881137681_jdkdrs | 4 pages | 설측 만곡을 부여한 3D 프린팅 플레이트를 이용한 하악 재건: 유한요소분석(FEA)
+19. contribution_1775881218004_33p7z4 | 3 pages | Latissimus Dorsi Free Flap을 이용한 구강악안면 결손부 재건
+20. contribution_1775881330403_ubxt2n | 5 pages | 구강편평상피세포암(OSCC)에서 잠재성 경부 림프절 전이 (Occult Cervical Lymph Node Metastasis)의 수술 전 예측 및 검증
+21. contribution_1775881488219_ldmhoz | 6 pages | 고령 환자에서 발생한 구강암의 임상병리학적 특징과 치료 결과에 대한 비교 분석
+22. contribution_1775882570189_0o4t2u | 5 pages | MRONJ 재수술 위험 예측과 치료 최적화:머신러닝 기반 임상 인자와 초기 수술적 치료의 상호작용 분석
+23. contribution_1775882781366_3didjx | 4 pages | 다기관 후향적 연구를 통한 다발성 골수종 환자에서 약물 관련 악골괴사의 발생률 및 위험인자 분석
+24. contribution_1775883083596_gof8ni | 1 pages | Floor of the mouth dermoid cyst: A clinicopathological review
+25. contribution_1775883138444_65ibs0 | 5 pages | DCT 기반 ROI HU 분석을 이용한 MRONJ 환자와 비-MRONJ 환자에서 구강상악동누공(Oro-antral fistula)의 치유 양상 비교
+26. contribution_1775883426904_x3c65i | 6 pages | 다형성 선종의 임상적 진단과 최종 병리조직 간 불일치 분석: 10년간의 후향적 연구
+27. contribution_1775883557026_yakdbl | 5 pages | 파노라마 방사선 사진에서 계층적 주석 인공지능 모델의 진단 정확도: 스크리닝 및 병변 위치 지정에 대한 이중 수준 평가
+28. contribution_1775883901725_8o62aj | 3 pages | 독립 치과병원 입원환자에서 발생한 응급실 전원의 발생률과 임상적 특성: 후향적 분석
+29. contribution_1775884418907_iysfve | 8 pages | 악골 단순 골낭의 병태생리학적 기전 분석을 통한 관찰 및 치료의 가이드라인 제안
+30. contribution_1775884375339_thxubx | 3 pages | 조대술 후 최종 적출술의 최적 시행 시기는 언제일까?
+31. contribution_1775884672140_ic19o4 | 3 pages | MRONJ 발생 후 항흡수제를 중단한 골전이 환자에서 유방암과 전립선암 간 skeletal-related event 및 survival outcome 비교
+32. contribution_1775884923569_xlktoz | 5 pages | rhBMP-2 복합 이식재를 활용한 측방 접근 상악동 거상술 및 임플란트 동시 식립의 장기적 예후: 7년 후향적 연구
+33. contribution_1775886491432_22ao9f | 2 pages | Implant Rehabilitation of Extensive Maxillary Bone Loss Secondary to Chronic Odontogenic Sinusitis Using a Press-fit Autogenous Ramal Block Graft: A Multidisciplinary Staged Approach
+34. contribution_1775887026790_jck597 | 3 pages | CBCT 기반 상악동 거상술 골이식 예측 인공지능 모델의 임상적 효용성 평가
+35. contribution_1775887271037_fsidli | 3 pages | 상악동 거상술 시 콜라겐 함유 돼지유래 이종골 이식재의 부피 안정성 및 방사선학적 골질 평가
+36. contribution_1775887583742_yyj8pk | 3 pages | 치과 임플란트 수술 후 치근단변위판막술이 각화치은 변화에 미치는 영향과 이와 관련된 요인 분석
+37. contribution_1775887910710_ln8po8 | 3 pages | 토끼 두개골 결손 모델에서 3D 프린팅 상아질 유래 기질을 이용한 골 재생
+38. contribution_1775888084698_cjisww | 4 pages | 상악동 내 치과 임플란트 전위: 임상적 특성과 외과적 제거 방법에 대한 분석
+39. contribution_1775888363468_hur8ef | 3 pages | 하악 과두 골절 수술 후 과두 부피 변화에 대한 3차원적 평가
+40. contribution_1775888475789_15l7ct | 3 pages | Pierre-Robin Sequence 환자에게 시행된 양악 악교정 수술을 동반한 양측 측두하악관절 전치환술: 증례 보고
+41. contribution_1775888576687_07vamq | 5 pages | 안면 비대칭 환자의 3차원적 턱관절 원판변위 양상과 턱교정 수술이 미치는 영향에 관한 연구
+42. contribution_1775888875403_gka512 | 3 pages | 측두하악관절 통증 환자에서 SPECT-CT상 SUVmax에 따른 임상 및 자기공명영상 특징 비교
+43. contribution_1775888937140_jziu9g | 6 pages | 소아 두개안면 기형 환자에서 발생하는 개구장애의 원인과 외과적 치료 효과에 관한 연구
+44. contribution_1775889127249_09jywp | 4 pages | 턱관절 장애 환자의 기능적 개선을 위한 턱 관절경 수술의 임상적 유효성 평가: 후향적 연구
+45. contribution_1775889262316_box3q1 | 3 pages | 측두하악관절 환자에서 Skeletal Anchorage System 사용에 따른 교합과 상하악골의 변화
+46. contribution_1775889314781_gf3sx0 | 3 pages | 추가적 유착 박리를 병행한 단회성 관절강 세정술의 임상적, 영상학적 효과
+47. contribution_1775889706180_aq8tfa | 4 pages | 개원가에서 구강상악동개통(누공)의 처치
+48. contribution_1775889926603_ul0ich | 7 pages | 컴퓨터 가상수술과 환자 맞춤형 고정판을 이용한 광대궁 골절의 최소침습적 수술법의 에 관한 연구
+[clear] deleted 185/185 existing editorPages
+[write] wrote 185/185 editorPages
+[done] 2026-04-11T13:48:53.010Z
+[summary] total pages=185

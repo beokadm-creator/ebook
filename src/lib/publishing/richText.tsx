@@ -34,12 +34,13 @@ const normalizeMarks = (marks?: TextMarkSet) => ({
   bold: Boolean(marks?.bold),
   italic: Boolean(marks?.italic),
   underline: Boolean(marks?.underline),
+  superscript: Boolean(marks?.superscript),
 });
 
 const marksEqual = (a?: TextMarkSet, b?: TextMarkSet) => {
   const left = normalizeMarks(a);
   const right = normalizeMarks(b);
-  return left.bold === right.bold && left.italic === right.italic && left.underline === right.underline;
+  return left.bold === right.bold && left.italic === right.italic && left.underline === right.underline && left.superscript === right.superscript;
 };
 
 export const mergeAdjacentRuns = (runs: TextRun[]) => {
@@ -69,6 +70,9 @@ export const textRunsToHtml = (runs: TextRun[]) =>
   runs
     .map((run) => {
       let content = escapeHtml(run.text).replace(/\n/g, '<br>');
+      if (run.marks?.superscript) {
+        content = `<sup>${content}</sup>`;
+      }
       if (run.marks?.underline) {
         content = `<u>${content}</u>`;
       }
@@ -102,6 +106,9 @@ const extractRunsFromNode = (node: Node, inherited: TextMarkSet = {}): TextRun[]
   if (tag === 'u') {
     marks.underline = true;
   }
+  if (tag === 'sup') {
+    marks.superscript = true;
+  }
   if (tag === 'br') {
     return [{ text: '\n', marks: inherited }];
   }
@@ -128,6 +135,14 @@ export const renderRunsToReact = (runs: TextRun[]) =>
       textDecoration: run.marks?.underline ? 'underline' : undefined,
       whiteSpace: 'pre-wrap' as const,
     };
+
+    if (run.marks?.superscript) {
+      return (
+        <sup key={`run-${index}`} style={style}>
+          {renderStructuredText(run.text)}
+        </sup>
+      );
+    }
 
     return (
       <span key={`run-${index}`} style={style}>

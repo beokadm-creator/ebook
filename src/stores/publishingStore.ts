@@ -11,7 +11,7 @@ import {
   sortFlowZonesForReadingOrder,
 } from '@/lib/publishing/contributionLayout';
 import { DEFAULT_PRESENTATION_TRACKS, createImageZone, createInitialPublishingDocument, createMainBodyZone, createSpeakerThreadZones, getThreadPlainText } from '@/lib/publishing/defaultDocument';
-import { normalizeStructuredBodyText } from '@/lib/publishing/structuredLabels';
+import { normalizeStructuredBodyText, parseAuthorTextToRuns } from '@/lib/publishing/structuredLabels';
 import { applyPresetToMaster, TemplatePresetKey } from '@/lib/publishing/templatePresets';
 import { rehydrateContributionThreadText } from '@/lib/publishing/threadTextSerialization';
 import {
@@ -3022,7 +3022,7 @@ export const usePublishingStore = create<PublishingStore>()((set, get) => ({
           draft.threads.push({
             id: threadId,
             type: 'text-flow',
-            canonicalText: [{ text: slot.text }],
+            canonicalText: (slot.slotKey === 'authors_ko' || slot.slotKey === 'authors_en') ? parseAuthorTextToRuns(slot.text) : [{ text: slot.text }],
             semanticRole: slot.role,
             styleOverride: getRoleStyleOverride(slot.role),
             ebook: {
@@ -3161,7 +3161,7 @@ export const usePublishingStore = create<PublishingStore>()((set, get) => ({
 
         const thread = findThreadForContributionSlot(draft, contribution, slotKey);
         if (thread && normalizedText) {
-          thread.canonicalText = [{ text: normalizedText }];
+          thread.canonicalText = (slotKey === 'authors_ko' || slotKey === 'authors_en') ? parseAuthorTextToRuns(normalizedText) : [{ text: normalizedText }];
           thread.semanticRole = resolvedSlot.role;
           thread.styleOverride = getRoleStyleOverride(resolvedSlot.role);
         } else if (thread && !normalizedText) {
@@ -3174,7 +3174,7 @@ export const usePublishingStore = create<PublishingStore>()((set, get) => ({
             draft.threads.push({
               id: threadId,
               type: 'text-flow',
-              canonicalText: [{ text: normalizedText }],
+              canonicalText: (slotKey === 'authors_ko' || slotKey === 'authors_en') ? parseAuthorTextToRuns(normalizedText) : [{ text: normalizedText }],
               semanticRole: resolvedSlot.role,
               styleOverride: getRoleStyleOverride(resolvedSlot.role),
               ebook: {
