@@ -571,37 +571,14 @@ const mergeRuns = (runs: TextRun[]) => {
   return merged;
 };
 
-const SUPERSCRIPT_DIGIT_MAP: Record<string, string> = {
-  '0': '⁰',
-  '1': '¹',
-  '2': '²',
-  '3': '³',
-  '4': '⁴',
-  '5': '⁵',
-  '6': '⁶',
-  '7': '⁷',
-  '8': '⁸',
-  '9': '⁹',
-};
-
-const AUTHOR_MARKER_PATTERN = /(\d+(?:[,-]\d+)*)\)/g;
-const SUPERSCRIPT_CLOSE_PAREN = '⁾';
-
 const normalizeContributionSlotText = (slotKey: string, text: string) => {
   const trimmed = text.trim();
   if (/^body(_ko|_en)?$/.test(slotKey)) {
-    return normalizeStructuredBodyText(trimmed);
+    const bodyTrimmed = text.replace(/^\s+/, '').replace(/[ \t]+$/, '');
+    return normalizeStructuredBodyText(bodyTrimmed);
   }
 
-  if (!/^authors(_ko|_en)?$/.test(slotKey)) {
-    return trimmed;
-  }
-
-  return trimmed
-    .replace(AUTHOR_MARKER_PATTERN, (_match, marker: string) =>
-      `${marker.replace(/\d/g, (digit) => SUPERSCRIPT_DIGIT_MAP[digit] ?? digit)}${SUPERSCRIPT_CLOSE_PAREN}`,
-    )
-    .replace(/\d/g, (digit) => SUPERSCRIPT_DIGIT_MAP[digit] ?? digit);
+  return trimmed;
 };
 
 const trimThreadFromPage = (document: PublishingDocument, threadId: string, pageId: string) => {

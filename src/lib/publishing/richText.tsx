@@ -8,7 +8,7 @@ const renderStructuredText = (text: string) =>
       return (
         <span key={`line-${lineIndex}`}>
           {line}
-          {lineIndex < lines.length - 1 ? '\n' : null}
+          {lineIndex < lines.length - 1 ? <br /> : null}
         </span>
       );
     }
@@ -18,7 +18,7 @@ const renderStructuredText = (text: string) =>
         <strong>{match.label}</strong>
         {match.separator}
         {match.rest}
-        {lineIndex < lines.length - 1 ? '\n' : null}
+        {lineIndex < lines.length - 1 ? <br /> : null}
       </span>
     );
   });
@@ -117,12 +117,7 @@ export const htmlToTextRuns = (html: string) => {
   const container = document.createElement('div');
   container.innerHTML = html;
   const rawRuns = Array.from(container.childNodes).flatMap((node) => extractRunsFromNode(node));
-  return mergeAdjacentRuns(rawRuns).map((run, index, list) => {
-    if (index === list.length - 1) {
-      return { ...run, text: run.text.replace(/\n+$/g, '') };
-    }
-    return run;
-  });
+  return mergeAdjacentRuns(rawRuns);
 };
 
 export const renderRunsToReact = (runs: TextRun[]) =>
@@ -146,14 +141,15 @@ export const splitRunsByTexts = (runs: TextRun[], segmentTexts: string[]) => {
   let runIndex = 0;
   let runOffset = 0;
 
-  segmentTexts.forEach((segmentText) => {
+  segmentTexts.forEach((segmentText, index) => {
     let remaining = segmentText.length;
     const segmentRuns: TextRun[] = [];
+    const isLastSegment = index === segmentTexts.length - 1;
 
-    while (remaining > 0 && runIndex < runs.length) {
+    while ((remaining > 0 || isLastSegment) && runIndex < runs.length) {
       const currentRun = runs[runIndex];
       const available = currentRun.text.slice(runOffset);
-      const take = Math.min(remaining, available.length);
+      const take = isLastSegment ? available.length : Math.min(remaining, available.length);
       const textPart = available.slice(0, take);
 
       if (textPart) {
@@ -163,7 +159,9 @@ export const splitRunsByTexts = (runs: TextRun[], segmentTexts: string[]) => {
         });
       }
 
-      remaining -= take;
+      if (!isLastSegment) {
+        remaining -= take;
+      }
       runOffset += take;
 
       if (runOffset >= currentRun.text.length) {

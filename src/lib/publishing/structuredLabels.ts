@@ -97,7 +97,7 @@ export const normalizeStructuredBodyText = (text: string) =>
 const SUPERSCRIPT_MAP: Record<string, string> = {
   '0': '⁰', '1': '¹', '2': '²', '3': '³', '4': '⁴',
   '5': '⁵', '6': '⁶', '7': '⁷', '8': '⁸', '9': '⁹',
-  ',': 'ʼ', // 위첨자 쉼표
+  ',': '⸴', // 위첨자 쉼표 (Raised Comma U+2E14)
   '-': '⁻', // 위첨자 하이픈
   '*': 'ˣ', // 위첨자 별표
   ')': '⁾'  // 위첨자 닫는 괄호

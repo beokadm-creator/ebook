@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import RichTextThreadEditor from '@/components/publishing/RichTextThreadEditor';
 import { renderRunsToReact } from '@/lib/publishing/richText';
+import Modal from '@/components/common/Modal';
 import { ContributionItem, PresentationTrackOption, TextRole, TextRun } from '@/types/publishing';
 
 interface SpeakerContributionPanelProps {
@@ -52,6 +53,7 @@ const SpeakerContributionPanel: React.FC<SpeakerContributionPanelProps> = ({
   onCancelSlot,
 }) => {
   const [trackFilter, setTrackFilter] = useState('all');
+  const [activeTab, setActiveTab] = useState<'list' | 'detail'>('list');
 
   const presentationTrackById = useMemo(
     () => new Map(presentationTracks.map((track) => [track.id, track])),
@@ -131,16 +133,50 @@ const SpeakerContributionPanel: React.FC<SpeakerContributionPanelProps> = ({
   const rowVirtualizer = useVirtualizer({
     count: filteredContributions.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => 140,
-    overscan: 5,
+    estimateSize: () => 64,
+    overscan: 10,
   });
 
   const selectedContributionTrackLabel = selectedContribution ? getContributionTrackLabel(selectedContribution) : '';
 
+  useEffect(() => {
+    if (selectedContribution) {
+      setActiveTab('detail');
+    } else {
+      setActiveTab('list');
+    }
+  }, [selectedContribution?.id]);
+
+  const handleSelectContribution = (pageId: string) => {
+    onSelectContribution(pageId);
+    setActiveTab('detail');
+  };
+
   return (
-    <>
-      <section className="flex flex-col h-full overflow-hidden rounded-3xl border border-slate-200 bg-slate-50 p-4">
-        <div className="mb-3 flex-shrink-0 flex items-center justify-between gap-3">
+    <div className="flex flex-col h-full bg-slate-100 p-2 gap-2">
+      <div className="flex shrink-0 gap-2 p-1 bg-slate-200/50 rounded-2xl">
+        <button
+          type="button"
+          onClick={() => setActiveTab('list')}
+          className={`flex-1 py-2 text-sm font-semibold rounded-xl transition ${activeTab === 'list' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+        >
+          발표자 목록 관리
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            if (selectedContribution) setActiveTab('detail');
+          }}
+          disabled={!selectedContribution}
+          className={`flex-1 py-2 text-sm font-semibold rounded-xl transition ${activeTab === 'detail' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-400 hover:text-slate-600 disabled:opacity-50'}`}
+        >
+          선택된 슬롯 편집
+        </button>
+      </div>
+
+      {activeTab === 'list' && (
+        <section className="flex flex-col flex-1 overflow-hidden rounded-3xl border border-slate-200 bg-slate-50 p-4">
+          <div className="mb-3 flex-shrink-0 flex items-center justify-between gap-3">
           <div>
             <p className="text-sm font-semibold text-slate-800">발표자 순서</p>
             <p className="text-xs text-slate-500">제목 대신 순번과 트랙 기준으로 관리합니다.</p>
@@ -203,71 +239,64 @@ const SpeakerContributionPanel: React.FC<SpeakerContributionPanelProps> = ({
                   }}
                 >
                   <div
-                    className={`rounded-2xl border px-3 py-3 mx-1 ${isActive ? 'border-slate-900 bg-white' : 'border-slate-200 bg-white/80'}`}
+                    className={`rounded-xl border px-3 py-2 mx-1 flex items-center justify-between gap-3 ${isActive ? 'border-slate-900 bg-white shadow-sm' : 'border-slate-200 bg-white/60'}`}
                   >
                     <button
                       type="button"
-                      onClick={() => onSelectContribution(contribution.pageId)}
-                      className="w-full text-left"
+                      onClick={() => handleSelectContribution(contribution.pageId)}
+                      className="flex-1 text-left min-w-0"
                     >
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <p className="text-xs uppercase tracking-[0.18em] text-slate-400">발표 순서</p>
-                          <p className="mt-1 text-base font-semibold text-slate-800">#{contribution.order}</p>
-                          {showPresentationTracks ? (
-                            <p className="mt-2 text-xs font-semibold text-sky-700">
-                              {contribution.presentationCode || '번호 미지정'}
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono text-xs font-bold text-slate-400 w-6">#{contribution.order}</span>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center justify-between gap-2">
+                            <p className="truncate text-sm font-bold text-slate-800">
+                              {contribution.title || '제목 없음'}
                             </p>
-                          ) : null}
-                          <p className="mt-1 text-xs text-slate-500">{getContributionTrackLabel(contribution)}</p>
-                          {contribution.sourceFileName ? (
-                            <p className="mt-1 truncate text-[11px] text-slate-400">{contribution.sourceFileName}</p>
-                          ) : null}
-                        </div>
-                        <div className="flex flex-col items-end gap-2">
-                          <span className="rounded-full bg-slate-100 px-3 py-1 text-xs text-slate-500">
-                            {pageNumberByContribution[contribution.id] ?? '-'}p
-                          </span>
-                          <span className={`rounded-full px-3 py-1 text-[11px] font-semibold ${contribution.status === 'completed' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
-                            {contribution.status === 'completed' ? '완료' : '작성중'}
-                          </span>
+                            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-500 whitespace-nowrap">
+                              {pageNumberByContribution[contribution.id] ?? '-'}p
+                            </span>
+                          </div>
+                          <p className="truncate text-xs text-slate-500">
+                            {showPresentationTracks && contribution.presentationCode ? `[${contribution.presentationCode}] ` : ''}
+                            {getContributionTrackLabel(contribution)}
+                          </p>
                         </div>
                       </div>
                     </button>
-                    <div className="mt-3 flex items-center justify-between">
-                      <div className="flex items-center gap-2">
+                    
+                    <div className="flex shrink-0 items-center gap-1">
+                      <div className="flex flex-col gap-0.5 mr-1">
                         <button
                           type="button"
                           onClick={() => onMoveContribution(contribution.id, 'up')}
                           disabled={contributionIndex <= 0}
-                          className="flex h-8 items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3 text-[11px] font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-40"
+                          className="flex h-6 w-6 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-600 transition hover:bg-slate-50 disabled:opacity-30"
                         >
-                          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="h-3 w-3">
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 10.5 12 3m0 0 7.5 7.5M12 3v18" />
+                          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" className="h-3 w-3">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 15.5l7.5-7.5 7.5 7.5" />
                           </svg>
-                          위로
                         </button>
                         <button
                           type="button"
                           onClick={() => onMoveContribution(contribution.id, 'down')}
                           disabled={contributionIndex === -1 || contributionIndex >= contributions.length - 1}
-                          className="flex h-8 items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3 text-[11px] font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-40"
+                          className="flex h-6 w-6 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-600 transition hover:bg-slate-50 disabled:opacity-30"
                         >
-                          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="h-3 w-3">
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 13.5 12 21m0 0-7.5-7.5M12 21V3" />
+                          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" className="h-3 w-3">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.5l-7.5 7.5-7.5-7.5" />
                           </svg>
-                          아래로
                         </button>
                       </div>
                       <button
                         type="button"
                         onClick={() => onDeleteContribution(contribution.id)}
-                        className="flex h-8 items-center gap-1.5 rounded-full border border-rose-200 bg-white px-3 text-[11px] font-semibold text-rose-700 transition hover:bg-rose-50"
+                        className="flex h-8 w-8 items-center justify-center rounded-full text-rose-400 transition hover:bg-rose-50 hover:text-rose-600"
+                        title="삭제"
                       >
-                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="h-3 w-3">
-                          <path strokeLinecap="round" strokeLinejoin="round" d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0" />
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="h-4 w-4">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
                         </svg>
-                        삭제
                       </button>
                     </div>
                   </div>
@@ -283,8 +312,10 @@ const SpeakerContributionPanel: React.FC<SpeakerContributionPanelProps> = ({
         </div>
       </section>
 
-      {selectedContribution ? (
-        <section className="flex flex-col h-full overflow-hidden rounded-3xl border border-slate-200 bg-slate-50 p-4">
+      )}
+
+      {activeTab === 'detail' && selectedContribution ? (
+        <section className="flex flex-col flex-1 overflow-hidden rounded-3xl border border-slate-200 bg-slate-50 p-4">
           <div className="mb-3 shrink-0 flex items-center justify-between gap-3">
             <div>
               <p className="text-sm font-semibold text-slate-800">발표자 슬롯 점검</p>
@@ -342,74 +373,87 @@ const SpeakerContributionPanel: React.FC<SpeakerContributionPanelProps> = ({
               return (
                 <div key={slot.slotKey} className="rounded-2xl border border-slate-200 bg-white p-3">
                   <div className="flex items-center justify-between gap-3">
-                    <div>
+                    <div className="flex items-center gap-2">
                       <p className="text-sm font-semibold text-slate-800">{slot.label}</p>
-                      <p className="text-xs text-slate-500">{slot.slotKey}</p>
+                      <p className="text-xs text-slate-400">{slot.slotKey}</p>
                     </div>
-                    <span className="rounded-full bg-slate-100 px-3 py-1 text-xs text-slate-500">
-                      {roleLabel[slot.role]}
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <span className="rounded-full bg-slate-100 px-3 py-1 text-[11px] text-slate-500">
+                        {roleLabel[slot.role]}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => onStartEditSlot(slot.slotKey, slotRuns)}
+                        className="flex h-7 items-center justify-center rounded-full bg-slate-900 px-3 text-[11px] font-semibold text-white transition hover:bg-slate-800"
+                      >
+                        {isBodySlot ? '볼드 수정' : '내용 수정'}
+                      </button>
+                    </div>
                   </div>
-                  {isEditing ? (
-                    <>
+                  
+                  <div className="mt-3 max-h-32 overflow-y-auto rounded-xl bg-slate-50 p-3 text-xs text-slate-600 border border-slate-100 custom-scrollbar">
+                    {slot.text ? renderRunsToReact(slotRuns) : <span className="text-slate-400 italic">입력된 내용이 없습니다.</span>}
+                  </div>
+
+                  {/* 수정 레이어 팝업 (모달) */}
+                  <Modal
+                    isOpen={isEditing}
+                    onClose={onCancelSlot}
+                    title={`${slot.label} 수정`}
+                  >
+                    <div className="flex flex-col gap-4">
                       {isBodySlot ? (
                         <>
-                          <div className="mt-3">
+                          <div className="rounded-xl border border-slate-200 overflow-hidden shadow-sm">
                             <RichTextThreadEditor
                               runs={editingRuns}
                               onChange={onEditingRunsChange}
                             />
                           </div>
-                          <p className="mt-2 text-xs text-slate-500">본문은 굵게만 수동 보정하면 PDF에도 그대로 반영됩니다.</p>
+                          <div className="rounded-lg bg-sky-50 p-3 flex gap-2 items-start border border-sky-100">
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-5 h-5 text-sky-500 shrink-0 mt-0.5">
+                              <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a.75.75 0 000 1.5h.253a.25.25 0 01.244.304l-.459 2.066A1.75 1.75 0 0010.747 15H11a.75.75 0 000-1.5h-.253a.25.25 0 01-.244-.304l.459-2.066A1.75 1.75 0 009.253 9H9z" clipRule="evenodd" />
+                            </svg>
+                            <p className="text-xs text-sky-800 leading-relaxed">
+                              본문은 볼드(굵게)와 이탤릭 등 기본 서식만 수동으로 보정하세요. 여기서 지정한 서식과 줄바꿈은 PDF 생성 시 캔버스에 그대로 반영됩니다.
+                            </p>
+                          </div>
                         </>
                       ) : (
                         <textarea
                           value={editingValue}
                           onChange={(event) => onEditingValueChange(event.target.value)}
-                          rows={4}
-                          className="mt-3 w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm outline-none"
+                          rows={6}
+                          placeholder={`${slot.label} 내용을 입력하세요...`}
+                          className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-slate-400 focus:ring-1 focus:ring-slate-400 shadow-sm transition"
                         />
                       )}
-                      <div className="mt-3 flex gap-2">
-                        <button
-                          type="button"
-                          onClick={onSaveSlot}
-                          className="rounded-full bg-slate-900 px-4 py-2 text-xs font-semibold text-white"
-                        >
-                          저장
-                        </button>
+                      
+                      <div className="flex justify-end gap-2 mt-2 pt-4 border-t border-slate-100">
                         <button
                           type="button"
                           onClick={onCancelSlot}
-                          className="rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-700"
+                          className="rounded-xl px-5 py-2.5 text-sm font-semibold text-slate-600 hover:bg-slate-100 transition"
                         >
                           취소
                         </button>
-                      </div>
-                    </>
-                  ) : (
-                    <>
-                      <div className="mt-3 max-h-48 overflow-auto rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
-                        {slot.text ? renderRunsToReact(slotRuns) : '내용 없음'}
-                      </div>
-                      <div className="mt-3 flex gap-2">
                         <button
                           type="button"
-                          onClick={() => onStartEditSlot(slot.slotKey, slotRuns)}
-                          className="rounded-full bg-slate-900 px-4 py-2 text-xs font-semibold text-white"
+                          onClick={onSaveSlot}
+                          className="rounded-xl bg-slate-900 px-6 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-slate-800 transition"
                         >
-                          {isBodySlot ? '볼드 수정' : '슬롯 수정'}
+                          변경사항 저장
                         </button>
                       </div>
-                    </>
-                  )}
+                    </div>
+                  </Modal>
                 </div>
               );
             })}
           </div>
         </section>
       ) : null}
-    </>
+    </div>
   );
 };
 

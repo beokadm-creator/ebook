@@ -20,7 +20,13 @@ const RichTextThreadEditor: React.FC<RichTextThreadEditorProps> = ({ runs, onCha
     }
 
     const nextHtml = textRunsToHtml(runs);
-    if (editorRef.current.innerHTML !== nextHtml) {
+    const currentParsed = htmlToTextRuns(editorRef.current.innerHTML || '');
+    
+    // Only update innerHTML if the parsed text is actually different from incoming runs.
+    // This prevents the cursor from jumping to the start while typing.
+    const isSame = JSON.stringify(currentParsed) === JSON.stringify(runs);
+    
+    if (!isSame && editorRef.current.innerHTML !== nextHtml) {
       editorRef.current.innerHTML = nextHtml;
     }
   }, [runs]);
@@ -67,7 +73,14 @@ const RichTextThreadEditor: React.FC<RichTextThreadEditorProps> = ({ runs, onCha
         contentEditable
         suppressContentEditableWarning
         onInput={() => onChange(htmlToTextRuns(editorRef.current?.innerHTML || ''))}
-        className="min-h-[160px] whitespace-pre-wrap px-4 py-3 text-sm leading-7 outline-none"
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            document.execCommand('insertLineBreak');
+            onChange(htmlToTextRuns(editorRef.current?.innerHTML || ''));
+          }
+        }}
+        className="min-h-[160px] whitespace-pre-wrap px-4 py-3 text-sm leading-7 text-slate-900 outline-none"
       />
     </div>
   );

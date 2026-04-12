@@ -1,5 +1,5 @@
 import { createMainBodyZone } from '@/lib/publishing/defaultDocument';
-import { ContributionItem, PublishingDocument } from '@/types/publishing';
+import { ContributionItem, PublishingDocument, TextRun } from '@/types/publishing';
 
 const FLOW_ROW_THRESHOLD_PX = 24;
 const DEFAULT_LAYOUT_RETRY_SCALES = [1, 0.82, 0.68] as const;
@@ -104,10 +104,12 @@ export const findThreadForContributionSlot = (
   ) ?? null;
 };
 
+import { splitRunsByTexts } from '@/lib/publishing/richText';
+
 const createThreadSegmentBlock = (
   thread: PublishingDocument['threads'][number],
   segmentIndex: number,
-  text: string,
+  runs: TextRun[],
 ): Extract<PublishingDocument['pages'][number]['zones'][number]['blocks'][number], { type: 'text' }> => ({
   id: `${thread.id}_seg_${segmentIndex.toString().padStart(3, '0')}`,
   type: 'text',
@@ -122,7 +124,7 @@ const createThreadSegmentBlock = (
     isTerminal: true,
   },
   content: {
-    runs: [{ text }],
+    runs,
   },
   styleOverride: thread.styleOverride,
   ebook: thread.ebook,
@@ -380,7 +382,7 @@ const rebuildContributionLayoutOnce = (
   };
 
   if (master.mode === 'speaker-thread') {
-    const renderSlotOnPage = (slot: ContributionItem['slots'][number], pageOffset: number) => {
+    const renderSlotOnPage = (slot: ContributionItem['slots'][number], pageOffset: number, isCommon = false) => {
       const thread = findThreadForContributionSlot(document, contribution, slot.slotKey);
       const zone = findZoneForContributionSlot(document, contribution.masterId, slot.slotKey);
       if (!thread || !zone) {
@@ -398,9 +400,15 @@ const rebuildContributionLayoutOnce = (
         return;
       }
 
-      const block = createThreadSegmentBlock(thread, 0, slot.text);
+      const segmentRuns = splitRunsByTexts(thread.canonicalText, [slot.text]);
+      const block = createThreadSegmentBlock(thread, 0, segmentRuns[0] ?? thread.canonicalText);
       pageZone.blocks.push(block);
-      thread.zoneSequence = [{ pageId: page.id, zoneId: startZoneId }];
+      
+      if (isCommon) {
+        thread.zoneSequence.push({ pageId: page.id, zoneId: startZoneId });
+      } else {
+        thread.zoneSequence = [{ pageId: page.id, zoneId: startZoneId }];
+      }
     };
 
     const renderBodyOnSinglePage = (slot: ContributionItem['slots'][number], pageOffset: number) => {
@@ -421,16 +429,17 @@ const rebuildContributionLayoutOnce = (
         return 1;
       }
 
-      const block = createThreadSegmentBlock(thread, 0, slot.text);
+      const segmentRuns = splitRunsByTexts(thread.canonicalText, [slot.text]);
+      const block = createThreadSegmentBlock(thread, 0, segmentRuns[0] ?? thread.canonicalText);
       block.flow.isTerminal = true;
       pageZone.blocks.push(block);
       thread.zoneSequence = [{ pageId: page.id, zoneId: startZoneId }];
       return 1;
     };
 
-    const trackSlot = contribution.slots.find((slot) => slot.slotKey === 'track');
     const koSlots = contribution.slots.filter((slot) => slot.slotKey.endsWith('_ko'));
     const enSlots = contribution.slots.filter((slot) => slot.slotKey.endsWith('_en'));
+    const commonSlots = contribution.slots.filter((slot) => !slot.slotKey.endsWith('_ko') && !slot.slotKey.endsWith('_en'));
     const hasKo = koSlots.some((slot) => slot.text.trim());
     const hasEn = enSlots.some((slot) => slot.text.trim());
     const pageLanguages: Array<'ko' | 'en'> = [];
@@ -440,9 +449,12 @@ const rebuildContributionLayoutOnce = (
     if (pageLanguages.length) {
       let currentOffset = 0;
 
-      if (trackSlot?.text.trim()) {
-        renderSlotOnPage(trackSlot, 0);
-      }
+      commonSlots.forEach((slot) => {
+        const thread = findThreadForContributionSlot(document, contribution, slot.slotKey);
+        if (thread) {
+          thread.zoneSequence = [];
+        }
+      });
 
       pageLanguages.forEach((language) => {
         const pageOffset = currentOffset;
@@ -451,6 +463,7 @@ const rebuildContributionLayoutOnce = (
         const bodySlot = slots.find((slot) => slot.slotKey === bodySlotKey);
         const frontmatterSlots = slots.filter((slot) => slot.slotKey !== bodySlotKey);
 
+        commonSlots.forEach((slot) => renderSlotOnPage(slot, pageOffset, true));
         frontmatterSlots.forEach((slot) => renderSlotOnPage(slot, pageOffset));
         const pagesConsumed = bodySlot ? renderBodyOnSinglePage(bodySlot, pageOffset) : 1;
         currentOffset += pagesConsumed;
@@ -482,7 +495,8 @@ const rebuildContributionLayoutOnce = (
     if (!pageZone) {
       return;
     }
-    const block = createThreadSegmentBlock(thread, 0, slot.text);
+    const segmentRuns = splitRunsByTexts(thread.canonicalText, [slot.text]);
+    const block = createThreadSegmentBlock(thread, 0, segmentRuns[0] ?? thread.canonicalText);
     pageZone.blocks.push(block);
     thread.zoneSequence = [{ pageId: rootPage.id, zoneId: startZoneId }];
   });
@@ -504,6 +518,7 @@ const rebuildContributionLayoutOnce = (
       options.capacityScale ?? 1,
     );
     const segments = splitTextByCapacity(slot.text, capacity);
+    const segmentRuns = splitRunsByTexts(thread.canonicalText, segments);
     thread.zoneSequence = [];
 
     segments.forEach((segmentText, index) => {
@@ -516,7 +531,7 @@ const rebuildContributionLayoutOnce = (
       if (!pageZone) {
         return;
       }
-      const block = createThreadSegmentBlock(thread, index, segmentText);
+      const block = createThreadSegmentBlock(thread, index, segmentRuns[index] ?? [{ text: segmentText }]);
       block.flow.isTerminal = index === segments.length - 1;
       pageZone.blocks.push(block);
       thread.zoneSequence.push({ pageId: page.id, zoneId: startZoneId });
