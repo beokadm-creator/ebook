@@ -53,6 +53,7 @@ const SpeakerContributionPanel: React.FC<SpeakerContributionPanelProps> = ({
   onCancelSlot,
 }) => {
   const [trackFilter, setTrackFilter] = useState('all');
+  const [searchQuery, setSearchQuery] = useState('');
   const [activeTab, setActiveTab] = useState<'list' | 'detail'>('list');
 
   const presentationTrackById = useMemo(
@@ -99,16 +100,30 @@ const SpeakerContributionPanel: React.FC<SpeakerContributionPanelProps> = ({
   }, [contributions, hasUnassignedTrack, presentationTrackById, presentationTracks]);
 
   const filteredContributions = useMemo(() => {
-    if (!showPresentationTracks || trackFilter === 'all') {
-      return contributions;
+    let result = contributions;
+
+    if (showPresentationTracks && trackFilter !== 'all') {
+      if (trackFilter === 'unassigned') {
+        result = result.filter((contribution) => !contribution.presentationTrackId || !presentationTrackById.has(contribution.presentationTrackId));
+      } else {
+        result = result.filter((contribution) => contribution.presentationTrackId === trackFilter);
+      }
     }
 
-    if (trackFilter === 'unassigned') {
-      return contributions.filter((contribution) => !contribution.presentationTrackId || !presentationTrackById.has(contribution.presentationTrackId));
+    if (searchQuery.trim()) {
+      const lowerQuery = searchQuery.toLowerCase();
+      result = result.filter((contribution) => {
+        const titleMatch = contribution.title?.toLowerCase().includes(lowerQuery);
+        const authorMatch = contribution.slots.some(
+          (slot) => (slot.slotKey.includes('author') || slot.slotKey.includes('speaker') || slot.slotKey.includes('affiliation')) 
+            && slot.text?.toLowerCase().includes(lowerQuery)
+        );
+        return titleMatch || authorMatch;
+      });
     }
 
-    return contributions.filter((contribution) => contribution.presentationTrackId === trackFilter);
-  }, [contributions, presentationTrackById, showPresentationTracks, trackFilter]);
+    return result;
+  }, [contributions, presentationTrackById, showPresentationTracks, trackFilter, searchQuery]);
 
   useEffect(() => {
     if (!showPresentationTracks) {
@@ -213,6 +228,33 @@ const SpeakerContributionPanel: React.FC<SpeakerContributionPanelProps> = ({
             </label>
           </div>
         ) : null}
+        
+        <div className="mb-3 flex-shrink-0 relative">
+          <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="h-4 w-4 text-slate-400">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
+            </svg>
+          </div>
+          <input
+            type="text"
+            placeholder="제목, 저자, 소속 검색..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="w-full rounded-xl border border-slate-200 pl-9 pr-9 py-2 text-sm outline-none transition focus:border-slate-400 focus:ring-2 focus:ring-slate-100"
+          />
+          {searchQuery ? (
+            <button
+              type="button"
+              onClick={() => setSearchQuery('')}
+              className="absolute inset-y-0 right-0 flex items-center pr-3 text-slate-400 hover:text-slate-600"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-4 w-4">
+                <path d="M6.28 5.22a.75.75 0 00-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 101.06 1.06L10 11.06l3.72 3.72a.75.75 0 101.06-1.06L11.06 10l3.72-3.72a.75.75 0 00-1.06-1.06L10 8.94 6.28 5.22z" />
+              </svg>
+            </button>
+          ) : null}
+        </div>
+
         <div ref={parentRef} className="flex-1 overflow-y-auto space-y-3 pr-2 custom-scrollbar">
           <div
             style={{
