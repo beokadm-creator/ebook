@@ -192,17 +192,18 @@ const SpeakerContributionPanel: React.FC<SpeakerContributionPanelProps> = ({
               return (
                 <div
                   key={virtualRow.key}
+                  ref={rowVirtualizer.measureElement}
+                  data-index={virtualRow.index}
                   style={{
                     position: 'absolute',
                     top: 0,
                     left: 0,
                     width: '100%',
-                    height: `${virtualRow.size}px`,
                     transform: `translateY(${virtualRow.start}px)`,
                   }}
                 >
                   <div
-                    className={`h-full rounded-2xl border px-3 py-3 mx-1 ${isActive ? 'border-slate-900 bg-white' : 'border-slate-200 bg-white/80'}`}
+                    className={`rounded-2xl border px-3 py-3 mx-1 ${isActive ? 'border-slate-900 bg-white' : 'border-slate-200 bg-white/80'}`}
                   >
                     <button
                       type="button"
