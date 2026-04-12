@@ -2183,22 +2183,6 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
             </div>
 
             <div className="rounded-2xl bg-slate-50 p-4 text-sm text-slate-600">
-              <p className="mb-3 font-semibold text-slate-800">TOC</p>
-              {document.toc.items.length ? (
-                <div className="space-y-2">
-                  {document.toc.items.map((item) => (
-                    <div key={item.id} className={`rounded-xl bg-white px-3 py-2 ${item.level === 2 ? 'ml-4' : ''}`}>
-                      <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Level {item.level}</p>
-                      <p className="mt-1 text-sm font-medium text-slate-800">{item.label.ko}</p>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p>헤딩을 추가하거나 TOC를 켜면 목차가 생성됩니다.</p>
-              )}
-            </div>
-
-            <div className="rounded-2xl bg-slate-50 p-4 text-sm text-slate-600">
               <p className="mb-3 font-semibold text-slate-800">선택 요소</p>
               {selectedBlock ? (
                 <>
@@ -2291,52 +2275,18 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
               )}
             </div>
 
-            {null}
-
-            {false && /* eslint-disable-line no-constant-binary-expression */ <div className="rounded-2xl bg-slate-50 p-4 text-sm text-slate-600">
-              <p className="mb-3 font-semibold text-slate-800">Publication</p>
-              <p>ID: {publicationId}</p>
-              <p>Preset: {document.layout.pagePreset.key}</p>
-              <p>Master Count: {document.masters.items.length}</p>
-              <p>Template Selection: {templateSelection.type ? `${templateSelection.type}:${templateSelection.id}` : 'none'}</p>
-              <p>A4 Width: {formatMm(document.layout.pagePreset.widthMm)}</p>
-              <p>A4 Height: {formatMm(document.layout.pagePreset.heightMm)}</p>
-            </div>}
-
             <div className="rounded-2xl bg-slate-50 p-4 text-sm text-slate-600">
-              <p className="mb-3 font-semibold text-slate-800">정렬 검증</p>
-              <p>Top Left: 0 px / 0 mm</p>
-              <p>Top Center: {validationMarkers.topCenter.x.toFixed(1)} px / {formatMm(pxToMm(validationMarkers.topCenter.x, document.layout.pagePreset))}</p>
-              <p>Top Right: {validationMarkers.topRight.x.toFixed(1)} px / {formatMm(pxToMm(validationMarkers.topRight.x, document.layout.pagePreset))}</p>
-              <p>Bottom Center Y: {validationMarkers.bottomCenter.y.toFixed(1)} px / {formatMm(pxToMm(validationMarkers.bottomCenter.y, document.layout.pagePreset))}</p>
-              {validationReport ? (
-                <div className="mt-3 space-y-2 rounded-xl bg-white px-3 py-3 text-xs text-slate-500">
-                  <p className="font-semibold text-slate-700">편집기 vs PDF 오차</p>
-                  <p>
-                    Page Width Delta: {validationReport.pageSizeDeltaPx.width.toFixed(3)} px /{' '}
-                    {formatMm(pxToMm(validationReport.pageSizeDeltaPx.width, document.layout.pagePreset))}
-                  </p>
-                  <p>
-                    Page Height Delta: {validationReport.pageSizeDeltaPx.height.toFixed(3)} px /{' '}
-                    {formatMm(pxToMm(validationReport.pageSizeDeltaPx.height, document.layout.pagePreset))}
-                  </p>
-                  {Object.entries(validationReport.markerDeltaPx).map(([key, delta]) => (
-                    <p key={key}>
-                      {key}: x {delta.x.toFixed(3)} px / {formatMm(pxToMm(delta.x, document.layout.pagePreset))}, y {delta.y.toFixed(3)} px /{' '}
-                      {formatMm(pxToMm(delta.y, document.layout.pagePreset))}
-                    </p>
-                  ))}
-                </div>
-              ) : (
-                <p className="mt-3 text-xs text-slate-400">마스터 스튜디오에서 가이드를 보고 맞춘 뒤 여기서 PDF를 점검하세요.</p>
-              )}
-            </div>
-
-            <div className="rounded-2xl bg-slate-50 p-4 text-sm text-slate-600">
-              <p className="mb-3 font-semibold text-slate-800">출력 점검</p>
+              <div className="mb-3 flex items-center justify-between">
+                <p className="font-semibold text-slate-800">출력 점검</p>
+                {preflightIssues.length > 0 ? (
+                  <span className="rounded-full bg-rose-100 px-2.5 py-0.5 text-[10px] font-bold text-rose-700">
+                    {preflightIssues.length}개
+                  </span>
+                ) : null}
+              </div>
               {preflightIssues.length ? (
                 <div className="space-y-2">
-                  {preflightIssues.map((issue) => (
+                  {preflightIssues.slice(0, 3).map((issue) => (
                     <button
                       key={issue.id}
                       type="button"
@@ -2346,9 +2296,18 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
                       }`}
                     >
                       <span className="mr-2 font-semibold uppercase">{issue.severity}</span>
-                      {issue.message}
+                      <span className="line-clamp-1">{issue.message}</span>
                     </button>
                   ))}
+                  {preflightIssues.length > 3 ? (
+                    <button
+                      type="button"
+                      onClick={() => setShowPreflightModal(true)}
+                      className="block w-full rounded-xl bg-slate-200 px-3 py-2 text-center text-xs font-semibold text-slate-700"
+                    >
+                      +{preflightIssues.length - 3}개 더 보기
+                    </button>
+                  ) : null}
                 </div>
               ) : (
                 <p className="rounded-xl bg-emerald-50 px-3 py-2 text-xs text-emerald-700">이상 없음</p>
