@@ -48,6 +48,11 @@ service cloud.firestore {
         allow write: if isAdmin();
       }
 
+      match /editorThreads/{threadId} {
+        allow read: if true;
+        allow write: if isAdmin();
+      }
+
       match /articles/{articleId} {
         allow read: if true;
         allow write: if isAdmin();

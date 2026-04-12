@@ -272,8 +272,8 @@ const SpeakerContributionPanel: React.FC<SpeakerContributionPanelProps> = ({
       </section>
 
       {selectedContribution ? (
-        <section className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
-          <div className="mb-3 flex items-center justify-between gap-3">
+        <section className="flex flex-col h-full overflow-hidden rounded-3xl border border-slate-200 bg-slate-50 p-4">
+          <div className="mb-3 shrink-0 flex items-center justify-between gap-3">
             <div>
               <p className="text-sm font-semibold text-slate-800">발표자 슬롯 점검</p>
               <p className="text-xs text-slate-500">
@@ -293,12 +293,12 @@ const SpeakerContributionPanel: React.FC<SpeakerContributionPanelProps> = ({
           <button
             type="button"
             onClick={onCompleteContribution}
-            className="mb-3 w-full rounded-2xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white"
+            className="mb-3 shrink-0 w-full rounded-2xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white"
           >
             완료 저장
           </button>
           {showPresentationTracks ? (
-            <div className="mb-3 rounded-2xl border border-slate-200 bg-white p-3">
+            <div className="mb-3 shrink-0 rounded-2xl border border-slate-200 bg-white p-3">
               <div className="mb-2 flex items-center justify-between gap-3">
                 <div>
                   <p className="text-sm font-semibold text-slate-800">발표 번호</p>
@@ -322,7 +322,7 @@ const SpeakerContributionPanel: React.FC<SpeakerContributionPanelProps> = ({
               </select>
             </div>
           ) : null}
-          <div className="space-y-3">
+          <div className="flex-1 overflow-y-auto space-y-3 pr-2 custom-scrollbar">
             {selectedContribution.slots.map((slot) => {
               const isEditing = editingSlotKey === slot.slotKey;
               const isBodySlot = slot.slotKey.startsWith('body');

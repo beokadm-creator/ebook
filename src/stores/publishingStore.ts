@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { produce } from 'immer';
+import { produce, current, isDraft } from 'immer';
 import {
   findThreadForContributionSlot,
   findZoneForContributionSlot,
@@ -193,14 +193,23 @@ const AUTOSAVE_DEBOUNCE_MS = 1200;
 
 let autosaveTimer: number | null = null;
 
-const clone = <T,>(value: T): T => value; // Dummy clone, actual deep copy is done by immer's produce
+const clone = <T,>(value: T): T => {
+  if (value === undefined) return value;
+  const target = isDraft(value) ? current(value) : value;
+  try {
+    return typeof structuredClone === 'function' ? structuredClone(target) : JSON.parse(JSON.stringify(target));
+  } catch {
+    return JSON.parse(JSON.stringify(target));
+  }
+};
+
 const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
 const createId = (prefix: string) => `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
 const pushHistoryEntry = (state: PublishingStore, label: string, documentOverride?: PublishingDocument) => {
   const snapshot = documentOverride ?? state.document;
   const currentEntry: HistoryEntry = {
-    document: typeof structuredClone === 'function' ? structuredClone(snapshot) : JSON.parse(JSON.stringify(snapshot)),
+    document: snapshot, // Since we use Immer, snapshot is structurally shared and immutable. No deep copy needed.
     label,
     revision: state.history.revision,
     timestamp: new Date().toISOString(),
@@ -2896,9 +2905,9 @@ export const usePublishingStore = create<PublishingStore>()((set, get) => ({
         return state;
       }
 
-      const currentDocument = typeof structuredClone === 'function' ? structuredClone(state.document) : JSON.parse(JSON.stringify(state.document));
+      const currentDocument = state.document;
       return {
-        document: typeof structuredClone === 'function' ? structuredClone(entry.document) : JSON.parse(JSON.stringify(entry.document)),
+        document: entry.document,
         history: {
           revision: state.history.revision + 1,
           undoStack: state.history.undoStack.slice(0, -1),
@@ -2927,9 +2936,9 @@ export const usePublishingStore = create<PublishingStore>()((set, get) => ({
         return state;
       }
 
-      const currentDocument = typeof structuredClone === 'function' ? structuredClone(state.document) : JSON.parse(JSON.stringify(state.document));
+      const currentDocument = state.document;
       return {
-        document: typeof structuredClone === 'function' ? structuredClone(entry.document) : JSON.parse(JSON.stringify(entry.document)),
+        document: entry.document,
         history: {
           revision: state.history.revision + 1,
           undoStack: [
@@ -3217,6 +3226,7 @@ export const usePublishingStore = create<PublishingStore>()((set, get) => ({
       const next = pushHistoryEntry(state, `Update contribution slot ${slotKey}`, nextDocument);
 
       return {
+        ...state,
         document: nextDocument,
         pagination: {
           ...state.pagination,
@@ -3328,6 +3338,7 @@ export const usePublishingStore = create<PublishingStore>()((set, get) => ({
       const next = pushHistoryEntry(state, `Update contribution runs ${slotKey}`, nextDocument);
 
       return {
+        ...state,
         document: nextDocument,
         pagination: {
           ...state.pagination,
@@ -3358,6 +3369,7 @@ export const usePublishingStore = create<PublishingStore>()((set, get) => ({
 
       const next = pushHistoryEntry(state, `Update contribution presentation track ${contributionId}`, nextDocument);
       return {
+        ...state,
         document: nextDocument,
         ...next,
       };
@@ -3380,6 +3392,7 @@ export const usePublishingStore = create<PublishingStore>()((set, get) => ({
 
       const next = pushHistoryEntry(state, `Update contribution status ${contributionId}`, nextDocument);
       return {
+        ...state,
         document: nextDocument,
         ...next,
       };

@@ -130,19 +130,7 @@ const buildStoredMasters = (documentState: PublishingDocument): StoredMaster[] =
     order: index,
   }));
 
-const hasRequiredSpeakerThreadSchema = (masters: PublishingDocument['masters']) => {
-  const speakerMaster = masters.items.find((master) => master.mode === 'speaker-thread');
-  if (!speakerMaster?.slotSchema?.length) {
-    return false;
-  }
-
-  const slotKeys = new Set(speakerMaster.slotSchema.map((slot) => slot.slotKey));
-  return ['title_ko', 'authors_ko', 'affiliation_ko', 'body_ko', 'title_en', 'body_en']
-    .every((slotKey) => slotKeys.has(slotKey));
-};
-
 const isCompatibleMasterSet = (
-  publicationId: string,
   masters: PublishingDocument['masters'] | null | undefined,
 ) => {
   if (!masters?.items?.length) {
@@ -161,19 +149,13 @@ const isCompatibleMasterSet = (
     return false;
   }
 
-  const baseline = createInitialPublishingDocument(publicationId).masters;
-  if (baseline.items.some((master) => master.mode === 'speaker-thread') && !hasRequiredSpeakerThreadSchema(masters)) {
-    return false;
-  }
-
   return true;
 };
 
 const resolveCompatibleGlobalMasters = (
-  publicationId: string,
   globalMasters: PublishingDocument['masters'] | null,
 ) => {
-  if (!isCompatibleMasterSet(publicationId, globalMasters)) {
+  if (!isCompatibleMasterSet(globalMasters)) {
     if (globalMasters) {
       console.warn('[publishing] ignoring incompatible global master library and falling back to defaults');
     }
@@ -204,7 +186,7 @@ const resolveDocumentMasters = (
     return fallbackMasters;
   }
 
-  const compatibleGlobalMasters = resolveCompatibleGlobalMasters(publicationId, globalMasters);
+  const compatibleGlobalMasters = resolveCompatibleGlobalMasters(globalMasters);
   if (compatibleGlobalMasters) {
     return compatibleGlobalMasters;
   }
@@ -551,7 +533,7 @@ export const loadPublishingDocument = async (publicationId: string) => {
   const globalMasters = masterLibrarySnap.exists()
     ? (masterLibrarySnap.data() as PublishingMasterLibraryDoc).masters
     : null;
-  const compatibleGlobalMasters = resolveCompatibleGlobalMasters(publicationId, globalMasters);
+  const compatibleGlobalMasters = resolveCompatibleGlobalMasters(globalMasters);
 
   if (!metaSnap.exists()) {
     const initialDocument = createInitialPublishingDocument(publicationId);

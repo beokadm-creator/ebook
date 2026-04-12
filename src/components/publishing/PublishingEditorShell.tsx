@@ -7,7 +7,7 @@ import {
   PlusIcon,
   TrashIcon,
 } from '@heroicons/react/24/outline';
-import { getRenderableImageUrl, uploadMasterImage, uploadPublicationImage } from '@/lib/publishing/assets';
+import { getRenderableImageUrl, uploadPublicationImage } from '@/lib/publishing/assets';
 import { formatMm, getPxPerMm, pxToMm } from '@/lib/publishing/a4';
 import { findThreadForContributionSlot, getChainRootPageId, inferZoneSlotKey } from '@/lib/publishing/contributionLayout';
 import { getThreadPlainText } from '@/lib/publishing/defaultDocument';
@@ -122,30 +122,6 @@ const getMaxValidationDeltaPx = (report: ValidationReport | null) => {
   );
 };
 
-const getDecorationCategoryLabel = (decoration: MasterTemplate['decorations'][number]) => {
-  if (decoration.textBinding === 'page.number') {
-    return '페이지 번호';
-  }
-  if (decoration.textBinding === 'section.number') {
-    return '섹션 번호';
-  }
-  if (decoration.textBinding === 'presentation.code') {
-    return '발표 번호';
-  }
-  if (decoration.textBinding === 'document.title') {
-    return '헤더';
-  }
-  if (decoration.type === 'image') {
-    return '로고/이미지';
-  }
-  if (decoration.y >= 1000) {
-    return '푸터';
-  }
-  if (decoration.y <= 120) {
-    return '헤더';
-  }
-  return decoration.type === 'shape' ? '라인/도형' : '기타 텍스트';
-};
 
 const getDecorationImageSrc = (decoration: MasterTemplate['decorations'][number], assets: PublishingDocument['assets']) =>
   getRenderableImageUrl(decoration.src || assets.find((asset) => asset.id === decoration.assetId)?.src || '');
@@ -804,10 +780,6 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
     addPage,
     deletePage,
     createMaster,
-    duplicateMaster,
-    deleteMaster,
-    setDefaultMaster,
-    renameMaster,
     updatePageMaster,
     updateDocumentMeta,
     addPresentationTrack,
@@ -815,18 +787,7 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
     deletePresentationTrack,
     updatePageNumbering,
     updatePrintGuides,
-    updateMasterBackground,
-    toggleMasterLock,
-    updateMasterDecoration,
-    updateGlobalMasterDecoration,
-    addMasterTextDecoration,
-    addMasterImageDecoration,
-    removeMasterDecoration,
-    toggleMasterDecorationLock,
-    toggleMasterZoneLock,
     updateThreadText,
-    toggleThreadToc,
-    deleteThread,
     addThreadWithText,
     addContribution,
     createSpeakerContribution,
@@ -846,12 +807,10 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
   const [imageUrl, setImageUrl] = useState('');
   const [uploadingImage, setUploadingImage] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
-  const [uploadingMasterImage, setUploadingMasterImage] = useState(false);
-  const [masterUploadProgress, setMasterUploadProgress] = useState(0);
   const [templateSelection, setTemplateSelection] = useState<TemplateSelection>({ type: null, id: null });
   const [validationReport, setValidationReport] = useState<ValidationReport | null>(null);
-  const [globalFixedManagerMode, setGlobalFixedManagerMode] = useState(false);
   const [showPreflightModal, setShowPreflightModal] = useState(false);
+  const globalFixedManagerMode = false;
   const [newMasterName, setNewMasterName] = useState('');
   const [newMasterPreset, setNewMasterPreset] = useState<TemplatePresetKey>('single-column');
   const [showCreateMasterModal, setShowCreateMasterModal] = useState(false);
@@ -876,7 +835,6 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
 
   const selectedPage = document.pages.find((item) => item.id === selection.pageId) ?? document.pages[1] ?? document.pages[0];
   const pageMaster = document.masters.items.find((item) => item.id === selectedPage?.masterId) ?? document.masters.items[0];
-  const selectedMaster = document.masters.items.find((item) => item.id === activeMasterId) ?? pageMaster ?? document.masters.items[0];
   const selectedContribution = useMemo(() => {
     const rootPageId = selectedPage ? getChainRootPageId(document, selectedPage.id) : null;
     return document.contributions.find((item) => item.pageId === rootPageId) ?? null;
@@ -1301,59 +1259,10 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
     const zone = page?.zones.find((item) => item.zoneId === selection.zoneId);
     return zone?.blocks.find((item) => item.id === selection.blockId) ?? null;
   }, [document.pages, selection.blockId, selection.pageId, selection.zoneId]);
-  const currentPageTextSlots = useMemo(() => {
-    if (!selectedPage || !pageMaster) {
-      return [];
-    }
-
-    const rootPageId = getChainRootPageId(document, selectedPage.id);
-    const seen = new Set<string>();
-
-    return pageMaster.contentZones
-      .filter((zone) => zone.kind === 'text-flow')
-      .filter((zone) => {
-        const key = getSlotIdentity(zone);
-        if (seen.has(key)) {
-          return false;
-        }
-        seen.add(key);
-        return true;
-      })
-      .map((zone) => {
-        const slotThread = document.threads.find((thread) => {
-          const threadPage = document.pages.find((page) => page.id === thread.sourcePageId);
-          if (!threadPage) {
-            return false;
-          }
-          const threadRootPageId = getChainRootPageId(document, thread.sourcePageId);
-          if (threadRootPageId !== rootPageId) {
-            return false;
-          }
-          const threadMaster = document.masters.items.find((item) => item.id === threadPage.masterId);
-          const threadZone = threadMaster?.contentZones.find((item) => item.id === thread.sourceZoneId);
-          return threadZone ? getSlotIdentity(threadZone) === getSlotIdentity(zone) : false;
-        }) ?? null;
-
-        return {
-          key: getSlotIdentity(zone),
-          zone,
-          thread: slotThread,
-        };
-      });
-  }, [document, pageMaster, selectedPage]);
   const pxPerMm = getPxPerMm(document.layout.pagePreset);
   const alignmentWarningThresholdPx = document.layout.printGuides.alignmentWarningThresholdPx ?? 0.75;
   const pageNumberAlignmentPreset = document.layout.pageNumbering.alignmentPreset ?? 'center';
   const pageNumberMirrorOnEvenPages = document.layout.pageNumbering.mirrorOnEvenPages ?? false;
-  const globalFixedDecorations = selectedMaster?.decorations.filter((item) => item.scope === 'global-fixed') ?? [];
-  const groupedGlobalFixedDecorations = useMemo(() => {
-    return globalFixedDecorations.reduce<Record<string, typeof globalFixedDecorations>>((acc, decoration) => {
-      const category = getDecorationCategoryLabel(decoration);
-      acc[category] = acc[category] ?? [];
-      acc[category].push(decoration);
-      return acc;
-    }, {});
-  }, [globalFixedDecorations]);
   const preflightIssues = useMemo<PreflightIssue[]>(() => {
     const issues: PreflightIssue[] = [];
 
@@ -1491,8 +1400,6 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
 
     return issues.filter((issue, index, array) => array.findIndex((item) => item.id === issue.id) === index);
   }, [alignmentWarningThresholdPx, document.layout.pageNumbering.enabled, document.layout.pagePreset, document.masters.items, document.pages, document.threads, document.toc.items.length, selectedPage?.id, validationReport]);
-  const templateDecorations = selectedMaster?.decorations.filter((item) => item.scope !== 'global-fixed') ?? [];
-  const editableZones = selectedMaster?.contentZones.filter((item) => item.scope !== 'global-fixed') ?? [];
   const validationMarkers = {
     topLeft: { x: 0, y: 0 },
     topCenter: { x: document.layout.pagePreset.widthPx / 2, y: 0 },
@@ -1647,71 +1554,6 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
       }
     },
     [addImageBlock, imageModalZoneId, primaryImageZoneId, publicationId, selectedPage],
-  );
-
-  const handleUploadMasterFile = useCallback(
-    async (event: React.ChangeEvent<HTMLInputElement>) => {
-      const file = event.target.files?.[0];
-      if (!file || !selectedMaster) {
-        return;
-      }
-
-      try {
-        setUploadingMasterImage(true);
-        setMasterUploadProgress(0);
-        const uploaded = await uploadMasterImage(file, setMasterUploadProgress);
-        addMasterImageDecoration(selectedMaster.id, uploaded);
-        showToast('마스터 이미지가 업로드되었습니다.', 'success');
-      } catch (error) {
-        logError(error, 'PublishingEditor-uploadMasterImage');
-        showToast('마스터 이미지 업로드에 실패했습니다.', 'error');
-      } finally {
-        setUploadingMasterImage(false);
-        setMasterUploadProgress(0);
-        event.target.value = '';
-      }
-    },
-    [addMasterImageDecoration, selectedMaster],
-  );
-
-  const updateSelectedDecorationFields = useCallback(
-    (
-      decorationId: string,
-      updates: Partial<{
-        x: number;
-        y: number;
-        width: number;
-        height: number;
-        text: string;
-        fill: string;
-        style: {
-          fontSize?: number;
-          fontWeight?: number;
-          textAlign?: 'left' | 'center' | 'right' | 'justify';
-          color?: string;
-        };
-      }>,
-    ) => {
-      if (!selectedMaster) {
-        return;
-      }
-
-      const decoration = selectedMaster.decorations.find((item) => item.id === decorationId);
-      if (!decoration) {
-        return;
-      }
-
-      if (decoration.scope === 'global-fixed') {
-        if (!globalFixedManagerMode) {
-          return;
-        }
-        updateGlobalMasterDecoration(selectedMaster.id, decorationId, updates);
-        return;
-      }
-
-      updateMasterDecoration(selectedMaster.id, decorationId, updates);
-    },
-    [globalFixedManagerMode, selectedMaster, updateGlobalMasterDecoration, updateMasterDecoration],
   );
 
   const jumpToIssue = useCallback((issue: PreflightIssue) => {
@@ -2163,559 +2005,6 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
           </div>
         </div>}
 
-        {false && /* eslint-disable-line no-constant-binary-expression, no-constant-condition */ selectedMaster ? (
-          <div className="mb-6 rounded-3xl border border-slate-200 bg-slate-50 p-4">
-            <div className="mb-3 flex items-center justify-between">
-              <div>
-                <div className="text-sm font-semibold text-slate-800">전역 고정 요소</div>
-                <div className="text-xs text-slate-500">공통 요소</div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setGlobalFixedManagerMode((value) => !value)}
-                className={`rounded-full px-3 py-2 text-xs font-semibold ${globalFixedManagerMode ? 'bg-slate-900 text-white' : 'bg-white text-slate-700'}`}
-              >
-                {globalFixedManagerMode ? '관리자 모드 ON' : '관리자 모드 OFF'}
-              </button>
-            </div>
-            <div className="space-y-3">
-              {Object.entries(groupedGlobalFixedDecorations).map(([category, decorations]) => (
-                <div key={category} className="space-y-3">
-                  <div className="px-1 text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">{category}</div>
-                  {decorations.map((decoration) => (
-                    <div key={decoration.id} className="rounded-2xl bg-white p-3 text-sm text-slate-600">
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <p className="font-semibold text-slate-800">
-                            {decoration.textBinding === 'page.number'
-                              ? '페이지 번호'
-                              : decoration.type === 'image'
-                                ? '전역 이미지'
-                                : decoration.type === 'shape'
-                                  ? '전역 도형'
-                                  : '전역 텍스트'}
-                          </p>
-                          <p className="text-xs text-slate-500">{decoration.id}</p>
-                        </div>
-                        <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">global-fixed</span>
-                      </div>
-                      {globalFixedManagerMode ? (
-                        <div className="mt-3 space-y-3">
-                          <div className="grid grid-cols-2 gap-2">
-                            <label className="block">
-                              <span className="mb-1 block text-xs text-slate-400">X</span>
-                              <input
-                                type="number"
-                                value={decoration.x}
-                                onChange={(event) => updateSelectedDecorationFields(decoration.id, { x: Number(event.target.value) || 0 })}
-                                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                              />
-                            </label>
-                            <label className="block">
-                              <span className="mb-1 block text-xs text-slate-400">Y</span>
-                              <input
-                                type="number"
-                                value={decoration.y}
-                                onChange={(event) => updateSelectedDecorationFields(decoration.id, { y: Number(event.target.value) || 0 })}
-                                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                              />
-                            </label>
-                            <label className="block">
-                              <span className="mb-1 block text-xs text-slate-400">Width</span>
-                              <input
-                                type="number"
-                                value={decoration.width}
-                                onChange={(event) => updateSelectedDecorationFields(decoration.id, { width: Number(event.target.value) || 1 })}
-                                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                              />
-                            </label>
-                            <label className="block">
-                              <span className="mb-1 block text-xs text-slate-400">Height</span>
-                              <input
-                                type="number"
-                                value={decoration.height}
-                                onChange={(event) => updateSelectedDecorationFields(decoration.id, { height: Number(event.target.value) || 1 })}
-                                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                              />
-                            </label>
-                          </div>
-                          {decoration.type !== 'shape' ? (
-                            <div className="grid grid-cols-2 gap-2">
-                              <label className="block">
-                                <span className="mb-1 block text-xs text-slate-400">글자 크기</span>
-                                <input
-                                  type="number"
-                                  value={decoration.style?.fontSize ?? 12}
-                                  onChange={(event) =>
-                                    updateSelectedDecorationFields(decoration.id, { style: { fontSize: Number(event.target.value) || 12 } })
-                                  }
-                                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                                />
-                              </label>
-                              <label className="block">
-                                <span className="mb-1 block text-xs text-slate-400">글자 두께</span>
-                                <input
-                                  type="number"
-                                  value={decoration.style?.fontWeight ?? 400}
-                                  onChange={(event) =>
-                                    updateSelectedDecorationFields(decoration.id, { style: { fontWeight: Number(event.target.value) || 400 } })
-                                  }
-                                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                                />
-                              </label>
-                              <label className="block">
-                                <span className="mb-1 block text-xs text-slate-400">정렬</span>
-                                <select
-                                  value={decoration.style?.textAlign ?? 'center'}
-                                  onChange={(event) =>
-                                    updateSelectedDecorationFields(decoration.id, {
-                                      style: { textAlign: event.target.value as 'left' | 'center' | 'right' | 'justify' },
-                                    })
-                                  }
-                                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                                >
-                                  <option value="left">Left</option>
-                                  <option value="center">Center</option>
-                                  <option value="right">Right</option>
-                                  <option value="justify">Justify</option>
-                                </select>
-                              </label>
-                              <label className="block">
-                                <span className="mb-1 block text-xs text-slate-400">색상</span>
-                                <input
-                                  type="color"
-                                  value={decoration.style?.color ?? '#666666'}
-                                  onChange={(event) =>
-                                    updateSelectedDecorationFields(decoration.id, { style: { color: event.target.value } })
-                                  }
-                                  className="h-10 w-full rounded-xl border border-slate-200 p-1"
-                                />
-                              </label>
-                            </div>
-                          ) : null}
-                          <p className="text-xs text-slate-500">위치/스타일 편집</p>
-                        </div>
-                      ) : (
-                        <>
-                          <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-slate-500">
-                            <p>X: {decoration.x}px / {formatMm(pxToMm(decoration.x, document.layout.pagePreset))}</p>
-                            <p>Y: {decoration.y}px / {formatMm(pxToMm(decoration.y, document.layout.pagePreset))}</p>
-                            <p>W: {decoration.width}px / {formatMm(pxToMm(decoration.width, document.layout.pagePreset))}</p>
-                            <p>H: {decoration.height}px / {formatMm(pxToMm(decoration.height, document.layout.pagePreset))}</p>
-                          </div>
-                          <p className="mt-2 text-xs text-amber-700">관리자 모드 필요</p>
-                        </>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              ))}
-            </div>
-          </div>
-        ) : null}
-
-        {false && /* eslint-disable-line no-constant-binary-expression, no-constant-condition */ selectedMaster ? (
-          <div className="mb-6 rounded-3xl border border-slate-200 bg-slate-50 p-4">
-            <div className="mb-4 rounded-2xl bg-white p-3">
-              <div className="mb-3 flex items-center justify-between">
-                <div>
-                  <div className="text-sm font-semibold text-slate-800">마스터 관리</div>
-                  <div className="text-xs text-slate-500">생성, 복제, 삭제</div>
-                </div>
-                <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
-                  {document.masters.defaultMasterId === selectedMaster.id ? 'default' : 'custom'}
-                </span>
-              </div>
-              <div className="mb-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-                <p className="text-sm font-semibold text-slate-800">새 마스터</p>
-                <p className="mt-1 text-xs text-slate-500">이름과 프리셋 선택</p>
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={() => setShowCreateMasterModal(true)}
-                  className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700"
-                >
-                  새 마스터
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    duplicateMaster(selectedMaster.id);
-                    const createdMaster = usePublishingStore.getState().document.masters.items.at(-1);
-                    if (createdMaster) {
-                      setActiveMasterId(createdMaster.id);
-                    }
-                  }}
-                  className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700"
-                >
-                  현재 마스터 복제
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setDefaultMaster(selectedMaster.id)}
-                  disabled={document.masters.defaultMasterId === selectedMaster.id}
-                  className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  기본 마스터 지정
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    const fallbackMaster = document.masters.items.find((master) => master.id !== selectedMaster.id);
-                    deleteMaster(selectedMaster.id);
-                    if (fallbackMaster) {
-                      setActiveMasterId(fallbackMaster.id);
-                    }
-                  }}
-                  disabled={document.masters.items.length <= 1 || document.masters.defaultMasterId === selectedMaster.id}
-                  className="rounded-2xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-700 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  현재 마스터 삭제
-                </button>
-              </div>
-              <div className="mt-3 space-y-2">
-                {document.masters.items.map((master) => (
-                  <button
-                    key={master.id}
-                    type="button"
-                    onClick={() => {
-                      setActiveMasterId(master.id);
-                      const pageUsingMaster = document.pages.find((page) => page.masterId === master.id);
-                      if (pageUsingMaster) {
-                        selectPage(pageUsingMaster.id);
-                      }
-                    }}
-                    className={`block w-full rounded-[24px] border px-4 py-3 text-left transition ${master.id === selectedMaster.id ? 'border-slate-900 bg-slate-900 text-white' : 'border-slate-200 bg-slate-50 text-slate-700 hover:border-slate-400'}`}
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="font-semibold">{master.name}</span>
-                      <span className="text-xs uppercase tracking-[0.16em]">
-                        {document.masters.defaultMasterId === master.id ? 'default' : 'master'}
-                      </span>
-                    </div>
-                    <div className={`mt-3 rounded-2xl border px-3 py-3 ${master.id === selectedMaster.id ? 'border-white/15 bg-white/10' : 'border-slate-200 bg-white'}`}>
-                      <div className="relative mx-auto aspect-[210/297] w-20 overflow-hidden rounded-xl border border-slate-200 bg-white">
-                        <div className="absolute inset-0" style={{ background: master.background.fill }} />
-                        {master.decorations.slice(0, 3).map((decoration) => (
-                          <div
-                            key={decoration.id}
-                            className="absolute rounded-[2px]"
-                            style={{
-                              left: `${(decoration.x / document.layout.pagePreset.widthPx) * 100}%`,
-                              top: `${(decoration.y / document.layout.pagePreset.heightPx) * 100}%`,
-                              width: `${(decoration.width / document.layout.pagePreset.widthPx) * 100}%`,
-                              height: `${Math.max(2, (decoration.height / document.layout.pagePreset.heightPx) * 100)}%`,
-                              background: decoration.type === 'shape' ? decoration.fill ?? '#cbd5e1' : decoration.type === 'image' ? '#cbd5e1' : '#94a3b8',
-                              opacity: 0.9,
-                            }}
-                          />
-                        ))}
-                        {master.contentZones.filter((zone) => zone?.frame).slice(0, 4).map((zone) => (
-                          <div
-                            key={zone.id}
-                            className="absolute border border-dashed border-sky-400/80"
-                            style={{
-                              left: `${(zone.frame.x / document.layout.pagePreset.widthPx) * 100}%`,
-                              top: `${(zone.frame.y / document.layout.pagePreset.heightPx) * 100}%`,
-                              width: `${(zone.frame.width / document.layout.pagePreset.widthPx) * 100}%`,
-                              height: `${(zone.frame.height / document.layout.pagePreset.heightPx) * 100}%`,
-                            }}
-                          />
-                        ))}
-                      </div>
-                      <div className={`mt-3 grid grid-cols-2 gap-2 text-xs ${master.id === selectedMaster.id ? 'text-slate-200' : 'text-slate-500'}`}>
-                        <p>Zones {master.contentZones.length}</p>
-                        <p>Decor {master.decorations.length}</p>
-                      </div>
-                    </div>
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="mb-3 flex items-center justify-between">
-              <div>
-                <div className="text-sm font-semibold text-slate-800">마스터 템플릿</div>
-                <div className="text-xs text-slate-500">{selectedMaster.name}</div>
-              </div>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => toggleMasterLock(selectedMaster.id)}
-                  className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700"
-                >
-                  {selectedMaster.locked ? <LockClosedIcon className="h-4 w-4" /> : <LockOpenIcon className="h-4 w-4" />}
-                  {selectedMaster.locked ? '마스터 잠금 해제' : '마스터 잠금'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => addMasterTextDecoration(selectedMaster.id)}
-                  disabled={selectedMaster.locked}
-                  className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  <PlusIcon className="h-4 w-4" />
-                  장식 추가
-                </button>
-              </div>
-            </div>
-
-            <label className="mb-4 block">
-              <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">마스터 이름</span>
-              <input
-                value={selectedMaster.name}
-                onChange={(event) => renameMaster(selectedMaster.id, event.target.value)}
-                className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium"
-              />
-            </label>
-
-            <label className="mb-4 block">
-              <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">배경 색상</span>
-              <input
-                type="color"
-                value={selectedMaster.background.fill}
-                disabled={selectedMaster.locked}
-                onChange={(event) => updateMasterBackground(selectedMaster.id, event.target.value)}
-                className="h-11 w-full rounded-2xl border border-slate-200 bg-white p-2"
-              />
-            </label>
-
-            <div className="space-y-3">
-              {templateDecorations.map((decoration) => (
-                <div key={decoration.id} className="rounded-2xl bg-white p-3">
-                  <div className="mb-3 flex items-center justify-between">
-                    <div>
-                      <div className="text-sm font-semibold text-slate-800">
-                        {decoration.textBinding === 'page.number'
-                          ? '페이지 번호'
-                          : decoration.textBinding === 'section.number'
-                            ? '섹션 번호'
-                            : decoration.textBinding === 'document.title'
-                              ? '문서 제목'
-                              : decoration.type === 'text'
-                                ? '텍스트 장식'
-                                : '도형 장식'}
-                      </div>
-                      <div className="text-xs text-slate-500">
-                        {decoration.id} · {decoration.scope} {decoration.locked ? '· locked' : ''}
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => toggleMasterDecorationLock(selectedMaster.id, decoration.id)}
-                        className="rounded-full p-2 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
-                      >
-                        {decoration.locked ? <LockClosedIcon className="h-4 w-4" /> : <LockOpenIcon className="h-4 w-4" />}
-                      </button>
-                      {!decoration.textBinding && decoration.scope !== 'global-fixed' ? (
-                        <button
-                          type="button"
-                          onClick={() => removeMasterDecoration(selectedMaster.id, decoration.id)}
-                          disabled={decoration.locked || selectedMaster.locked}
-                          className="rounded-full p-2 text-slate-400 transition hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-50"
-                        >
-                          <TrashIcon className="h-4 w-4" />
-                        </button>
-                      ) : null}
-                    </div>
-                  </div>
-
-                  {decoration.type === 'text' && !decoration.textBinding ? (
-                    <label className="mb-3 block">
-                      <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">텍스트</span>
-                      <input
-                        type="text"
-                        value={decoration.text || ''}
-                        disabled={selectedMaster.locked || decoration.scope === 'global-fixed' || decoration.locked}
-                        onChange={(event) =>
-                          updateMasterDecoration(selectedMaster.id, decoration.id, { text: event.target.value })
-                        }
-                        className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                      />
-                    </label>
-                  ) : null}
-
-                  {decoration.type === 'image' ? (
-                    <div className="mb-3">
-                      {getDecorationImageSrc(decoration, document.assets) ? (
-                        <img
-                          src={getDecorationImageSrc(decoration, document.assets)}
-                          alt=""
-                          crossOrigin="anonymous"
-                          referrerPolicy="no-referrer"
-                          className="h-20 w-full rounded-xl bg-slate-50 object-contain"
-                        />
-                      ) : (
-                        <div className="flex h-20 w-full items-center justify-center rounded-xl border border-dashed border-slate-300 bg-slate-50 text-xs text-slate-500">
-                          이미지 없음
-                        </div>
-                      )}
-                    </div>
-                  ) : null}
-
-                  <div className="grid grid-cols-2 gap-2">
-                    <label className="block">
-                      <span className="mb-1 block text-xs text-slate-400">X</span>
-                      <input
-                        type="number"
-                        value={decoration.x}
-                        disabled={selectedMaster.locked || decoration.scope === 'global-fixed' || decoration.locked}
-                        onChange={(event) =>
-                          updateMasterDecoration(selectedMaster.id, decoration.id, { x: Number(event.target.value) || 0 })
-                        }
-                        className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                      />
-                    </label>
-                    <label className="block">
-                      <span className="mb-1 block text-xs text-slate-400">Y</span>
-                      <input
-                        type="number"
-                        value={decoration.y}
-                        disabled={selectedMaster.locked || decoration.scope === 'global-fixed' || decoration.locked}
-                        onChange={(event) =>
-                          updateMasterDecoration(selectedMaster.id, decoration.id, { y: Number(event.target.value) || 0 })
-                        }
-                        className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                      />
-                    </label>
-                    <label className="block">
-                      <span className="mb-1 block text-xs text-slate-400">Width</span>
-                      <input
-                        type="number"
-                        value={decoration.width}
-                        disabled={selectedMaster.locked || decoration.scope === 'global-fixed' || decoration.locked}
-                        onChange={(event) =>
-                          updateMasterDecoration(selectedMaster.id, decoration.id, { width: Number(event.target.value) || 1 })
-                        }
-                        className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                      />
-                    </label>
-                    <label className="block">
-                      <span className="mb-1 block text-xs text-slate-400">Height</span>
-                      <input
-                        type="number"
-                        value={decoration.height}
-                        disabled={selectedMaster.locked || decoration.scope === 'global-fixed' || decoration.locked}
-                        onChange={(event) =>
-                          updateMasterDecoration(selectedMaster.id, decoration.id, { height: Number(event.target.value) || 1 })
-                        }
-                        className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                      />
-                    </label>
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            <div className="mt-4 space-y-3">
-              <div className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">텍스트 영역 잠금</div>
-              {editableZones.map((zone) => (
-                <div key={zone.id} className="flex items-center justify-between rounded-2xl bg-white px-4 py-3 text-sm">
-                  <div>
-                    <p className="font-semibold text-slate-800">{zone.name}</p>
-                    <p className="text-xs text-slate-500">
-                      {zone.id} {zone.flowOrder ? `· Flow ${zone.flowOrder}` : ''}
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => toggleMasterZoneLock(selectedMaster.id, zone.id)}
-                    disabled={selectedMaster.locked}
-                    className="inline-flex items-center gap-2 rounded-full border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {zone.locked ? <LockClosedIcon className="h-4 w-4" /> : <LockOpenIcon className="h-4 w-4" />}
-                    {zone.locked ? '영역 잠금 해제' : '영역 잠금'}
-                  </button>
-                </div>
-              ))}
-            </div>
-            <label className={`mt-3 flex items-center justify-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 ${selectedMaster.locked ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}`}>
-              <PhotoIcon className="h-4 w-4" />
-              마스터 이미지 업로드
-              <input type="file" accept="image/*" onChange={handleUploadMasterFile} className="hidden" disabled={selectedMaster.locked} />
-            </label>
-            {uploadingMasterImage ? (
-              <p className="mt-3 text-xs text-slate-500">마스터 업로드 중... {Math.round(masterUploadProgress * 100)}%</p>
-            ) : null}
-          </div>
-        ) : null}
-
-        {null}
-
-        <div className="space-y-5 overflow-y-auto pb-10">
-          {!isSpeakerThreadPage ? currentPageTextSlots.map(({ key, zone, thread }) => (
-            <section key={key} className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
-              <div className="mb-3 flex items-center justify-between gap-3">
-                <div>
-                  <p className="text-sm font-semibold text-slate-800">{zone.name}</p>
-                  <p className="text-xs text-slate-500">{inferZoneSlotKey(zone) || zone.id}</p>
-                </div>
-                <span className="rounded-full bg-white px-3 py-1 text-xs text-slate-500">
-                  {thread ? `${thread.zoneSequence.length} page` : '비어 있음'}
-                </span>
-              </div>
-              <div className="mb-3 flex gap-2">
-                <span className="rounded-full bg-white px-3 py-2 text-xs text-slate-500">
-                  {thread ? roleLabel[thread.semanticRole] : ''}
-                </span>
-                {thread ? (
-                  <button
-                    type="button"
-                    onClick={() => toggleThreadToc(thread.id)}
-                    className={`rounded-full px-4 py-2 text-xs font-semibold ${
-                      thread.ebook.toc.enabled ? 'bg-amber-100 text-amber-800' : 'bg-white text-slate-600'
-                    }`}
-                  >
-                    TOC {thread.ebook.toc.enabled ? 'ON' : 'OFF'}
-                  </button>
-                ) : null}
-              </div>
-              <div className="max-h-44 overflow-hidden rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700">
-                {thread ? getThreadPlainText(document, thread.id).trim() || '내용 없음' : '아직 내용 없음'}
-              </div>
-              <div className="mt-3 flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (thread) {
-                      openTextModalForEdit(thread.id);
-                    } else {
-                      setActiveContentZoneId(zone.id);
-                      setTextModalThreadId(null);
-                      setTextModalZoneId(zone.id);
-                      setTextModalValue('');
-                      setShowTextModal(true);
-                    }
-                  }}
-                  className="rounded-full bg-slate-900 px-4 py-2 text-xs font-semibold text-white"
-                >
-                  {thread ? '내용 수정' : '내용 입력'}
-                </button>
-                {thread ? (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      deleteThread(thread.id);
-                      showToast('글을 삭제했습니다.', 'success');
-                    }}
-                    className="rounded-full border border-rose-200 bg-white px-4 py-2 text-xs font-semibold text-rose-700"
-                  >
-                    삭제
-                  </button>
-                ) : null}
-              </div>
-              <p className="mt-2 text-xs text-slate-400">
-                {thread ? `${thread.zoneSequence.length} page · ${roleLabel[thread.semanticRole]}` : '빈 슬롯'}
-              </p>
-            </section>
-          )) : null}
-          {!isSpeakerThreadPage && !currentPageTextSlots.length ? (
-            <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-5 text-sm text-slate-500">
-              현재 페이지 텍스트 슬롯 없음
-            </div>
-          ) : null}
-        </div>
       </aside>
 
       <main className="flex-1 px-8 py-6">
@@ -2834,7 +2123,7 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
             ) : null}
           </section>
 
-          <aside className="space-y-4 rounded-[28px] border border-slate-200 bg-white p-5 [&_input]:bg-white [&_input]:text-slate-900 [&_select]:bg-white [&_select]:text-slate-900 [&_textarea]:bg-white [&_textarea]:text-slate-900">
+          <aside className="flex flex-col space-y-4 rounded-[28px] border border-slate-200 bg-white p-5 [&_input]:bg-white [&_input]:text-slate-900 [&_select]:bg-white [&_select]:text-slate-900 [&_textarea]:bg-white [&_textarea]:text-slate-900 h-full overflow-hidden">
             {isSpeakerThreadPage ? (
               <SpeakerContributionPanel
                 contributions={document.contributions}
@@ -2867,7 +2156,7 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
                 }}
               />
             ) : null}
-            <div className="rounded-2xl bg-slate-50 p-4 text-sm text-slate-600">
+            <div className="shrink-0 rounded-2xl bg-slate-50 p-4 text-sm text-slate-600">
               <p className="mb-3 font-semibold text-slate-800">{isSpeakerThreadPage ? '발표자 정보' : '페이지 정보'}</p>
               {selectedContribution ? (
                 <>
