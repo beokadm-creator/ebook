@@ -1400,14 +1400,6 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
 
     return issues.filter((issue, index, array) => array.findIndex((item) => item.id === issue.id) === index);
   }, [alignmentWarningThresholdPx, document.layout.pageNumbering.enabled, document.layout.pagePreset, document.masters.items, document.pages, document.threads, document.toc.items.length, selectedPage?.id, validationReport]);
-  const validationMarkers = {
-    topLeft: { x: 0, y: 0 },
-    topCenter: { x: document.layout.pagePreset.widthPx / 2, y: 0 },
-    topRight: { x: document.layout.pagePreset.widthPx, y: 0 },
-    bottomLeft: { x: 0, y: document.layout.pagePreset.heightPx },
-    bottomCenter: { x: document.layout.pagePreset.widthPx / 2, y: document.layout.pagePreset.heightPx },
-    bottomRight: { x: document.layout.pagePreset.widthPx, y: document.layout.pagePreset.heightPx },
-  };
 
   useEffect(() => {
     if (!selectedPage) {
