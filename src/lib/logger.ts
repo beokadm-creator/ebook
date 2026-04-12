@@ -5,6 +5,10 @@
 
 import * as Sentry from '@sentry/react';
 
+const env = ((import.meta as ImportMeta & {
+  env?: Record<string, string | boolean | undefined>;
+}).env ?? {}) as Record<string, string | boolean | undefined>;
+
 interface LogContext {
   context?: string;
   error?: unknown;
@@ -12,7 +16,7 @@ interface LogContext {
 }
 
 class Logger {
-  private isDevelopment = import.meta.env.DEV;
+  private isDevelopment = Boolean(env.DEV);
 
   error(message: string, context?: LogContext): void {
     if (this.isDevelopment) {

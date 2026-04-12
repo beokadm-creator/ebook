@@ -3,6 +3,10 @@ interface GLMChatMessage {
   content: string;
 }
 
+const env = ((import.meta as ImportMeta & {
+  env?: Record<string, string | boolean | undefined>;
+}).env ?? {}) as Record<string, string | boolean | undefined>;
+
 interface GLMChatResponse {
   id: string;
   object: string;
@@ -30,13 +34,13 @@ class GLMClient {
   private disableThinking: boolean;
 
   constructor() {
-    this.apiKey = import.meta.env.VITE_GLM_API_KEY;
-    const defaultApiBase = import.meta.env.DEV
+    this.apiKey = typeof env.VITE_GLM_API_KEY === 'string' ? env.VITE_GLM_API_KEY : undefined;
+    const defaultApiBase = env.DEV
       ? 'https://api.z.ai/api/coding/paas/v4'
       : '/api/glm';
-    this.apiBase = (import.meta.env.VITE_GLM_API_BASE || defaultApiBase).replace(/\/$/, '');
-    this.model = import.meta.env.VITE_GLM_MODEL || 'glm-4.7';
-    this.disableThinking = import.meta.env.VITE_GLM_DISABLE_THINKING !== 'false';
+    this.apiBase = ((typeof env.VITE_GLM_API_BASE === 'string' ? env.VITE_GLM_API_BASE : defaultApiBase)).replace(/\/$/, '');
+    this.model = typeof env.VITE_GLM_MODEL === 'string' ? env.VITE_GLM_MODEL : 'glm-4.7';
+    this.disableThinking = env.VITE_GLM_DISABLE_THINKING !== 'false';
   }
 
   private usesProxy() {
