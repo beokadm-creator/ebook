@@ -494,7 +494,19 @@ const rebuildContributionLayoutOnce = (
           });
         }
 
-        commonSlots.forEach((slot) => renderSlotOnPage(slot, pageOffset, true));
+        commonSlots.forEach((slot) => {
+          // If the slot is track/session and it has no text, try to use the presentation track label
+          let textToRender = slot.text;
+          if (slot.slotKey === 'track' && !textToRender.trim() && contribution.presentationTrackId) {
+            const trackOption = document.meta.presentationTracks?.find(t => t.id === contribution.presentationTrackId);
+            if (trackOption) {
+              textToRender = `${trackOption.prefix}. ${trackOption.label}`;
+            }
+          }
+          
+          const modifiedSlot = { ...slot, text: textToRender };
+          renderSlotOnPage(modifiedSlot, pageOffset, true);
+        });
         frontmatterSlots.forEach((slot) => renderSlotOnPage(slot, pageOffset));
         const pagesConsumed = bodySlot ? renderBodyOnSinglePage(bodySlot, pageOffset) : 1;
         currentOffset += pagesConsumed;
@@ -524,6 +536,14 @@ const rebuildContributionLayoutOnce = (
   const frontmatterSlots = contribution.slots.filter((slot) => !slot.slotKey.startsWith('body'));
 
   frontmatterSlots.forEach((slot) => {
+    let textToRender = slot.text;
+    if (slot.slotKey === 'track' && !textToRender.trim() && contribution.presentationTrackId) {
+      const trackOption = document.meta.presentationTracks?.find(t => t.id === contribution.presentationTrackId);
+      if (trackOption) {
+        textToRender = `${trackOption.prefix}. ${trackOption.label}`;
+      }
+    }
+
     const thread = findThreadForContributionSlot(document, contribution, slot.slotKey);
     const zone = findZoneForContributionSlot(document, contribution.masterId, slot.slotKey);
     if (!thread || !zone) {
@@ -534,7 +554,7 @@ const rebuildContributionLayoutOnce = (
     if (!pageZone) {
       return;
     }
-    const segmentRuns = splitRunsByTexts(thread.canonicalText, [slot.text]);
+    const segmentRuns = splitRunsByTexts(thread.canonicalText, [textToRender]);
     const block = createThreadSegmentBlock(thread, 0, segmentRuns[0] ?? thread.canonicalText);
     pageZone.blocks.push(block);
     thread.zoneSequence = [{ pageId: rootPage.id, zoneId: startZoneId }];
