@@ -22,7 +22,6 @@ interface SpeakerContributionPanelProps {
   onSelectContribution: (pageId: string) => void;
   onMoveContribution: (contributionId: string, direction: 'up' | 'down') => void;
   onDeleteContribution: (contributionId: string) => void;
-  onRebuildAllLayouts: () => void;
   onDownloadContributionPdf: (contributionId: string) => void;
   onDownloadTrackPdf: (trackId: string) => void;
   onStartEditSlot: (slotKey: string, runs: TextRun[]) => void;
@@ -49,7 +48,6 @@ const SpeakerContributionPanel: React.FC<SpeakerContributionPanelProps> = ({
   onSelectContribution,
   onMoveContribution,
   onDeleteContribution,
-  onRebuildAllLayouts,
   onDownloadContributionPdf,
   onDownloadTrackPdf,
   onStartEditSlot,
@@ -203,14 +201,6 @@ const SpeakerContributionPanel: React.FC<SpeakerContributionPanelProps> = ({
             <p className="text-xs text-slate-500">제목 대신 순번과 트랙 기준으로 관리합니다.</p>
           </div>
           <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={onRebuildAllLayouts}
-              title="원고의 레이아웃 꼬임이나 남은 빈 페이지들을 한 번에 정리합니다"
-              className="rounded-full bg-blue-50 text-blue-600 px-3 py-2 text-xs font-semibold hover:bg-blue-100 transition"
-            >
-              레이아웃 자동 보정
-            </button>
             <button
               type="button"
               onClick={onCreateContribution}
