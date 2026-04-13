@@ -520,6 +520,17 @@ const rebuildContributionLayoutOnce = (
         !allContributionPageIds.includes(p.id) || usedPageIds.includes(p.id)
       );
 
+      // Also clean up any threads that might belong to the discarded pages
+      const discardedPageIds = allContributionPageIds.filter(id => !usedPageIds.includes(id));
+      if (discardedPageIds.length > 0) {
+        document.threads = document.threads.filter(thread => {
+          if (contribution.slots.some(slot => findThreadForContributionSlot(document, contribution, slot.slotKey)?.id === thread.id)) {
+            return true;
+          }
+          return !discardedPageIds.includes(thread.sourcePageId);
+        });
+      }
+
       normalizeContributionOrder(document);
       return document;
     }
@@ -615,9 +626,23 @@ const rebuildContributionLayoutOnce = (
   const usedPageIds = pagesByOffset.slice(0, currentOffset === 0 ? 1 : currentOffset).map(p => p.id);
   const allContributionPageIds = pagesByOffset.map(p => p.id);
   
+  // Update document.pages: keep pages that are NOT part of this contribution's chain,
+  // OR pages that ARE part of the chain but were actually used (usedPageIds)
   document.pages = document.pages.filter(p => 
     !allContributionPageIds.includes(p.id) || usedPageIds.includes(p.id)
   );
+
+  // Also clean up any threads that might belong to the discarded pages
+  const discardedPageIds = allContributionPageIds.filter(id => !usedPageIds.includes(id));
+  if (discardedPageIds.length > 0) {
+    document.threads = document.threads.filter(thread => {
+      // Don't remove the main contribution threads themselves
+      if (contribution.slots.some(slot => findThreadForContributionSlot(document, contribution, slot.slotKey)?.id === thread.id)) {
+        return true;
+      }
+      return !discardedPageIds.includes(thread.sourcePageId);
+    });
+  }
 
   normalizeContributionOrder(document);
   return document;
