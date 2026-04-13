@@ -9,7 +9,7 @@ import {
 } from '@heroicons/react/24/outline';
 import { getRenderableImageUrl, uploadPublicationImage } from '@/lib/publishing/assets';
 import { formatMm, getPxPerMm, pxToMm } from '@/lib/publishing/a4';
-import { findThreadForContributionSlot, getChainRootPageId, inferZoneSlotKey } from '@/lib/publishing/contributionLayout';
+import { findThreadForContributionSlot, getChainRootPageId, getContributionChainPages, inferZoneSlotKey } from '@/lib/publishing/contributionLayout';
 import { getThreadPlainText } from '@/lib/publishing/defaultDocument';
 import { parseDocxManuscriptWithAI } from '@/lib/publishing/docxImport';
 import { glmClient } from '@/lib/ai/glmClient';
@@ -18,7 +18,7 @@ import { TEMPLATE_PRESET_DESCRIPTIONS, TEMPLATE_PRESET_LABELS, TemplatePresetKey
 import { mergeAdjacentRuns, renderRunsToReact } from '@/lib/publishing/richText';
 import { showToast } from '@/components/common/Toast';
 import { usePublishingStore } from '@/stores/publishingStore';
-import { ElementScope, MasterTemplate, PageBlock, PublicationPage, PublishingDocument, TextRole, TextRun, ZoneKind } from '@/types/publishing';
+import { ElementScope, MasterTemplate, PageBlock, PagePreset, PublicationPage, PublishingDocument, TextRole, TextRun, ZoneKind } from '@/types/publishing';
 import { logError } from '@/utils/errorHandler';
 import FlowGroupContainer from './FlowGroupContainer';
 import SpeakerContributionPanel from './SpeakerContributionPanel';
@@ -1465,6 +1465,30 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
     });
   }, [document, history.revision, selectedPage]);
 
+  const [pdfDownloadProgress, setPdfDownloadProgress] = useState<{ current: number; total: number } | null>(null);
+
+  const downloadPdfWithProgress = async (
+    pages: HTMLElement[],
+    title: string,
+    preset: PagePreset | undefined
+  ) => {
+    setPdfDownloadProgress({ current: 0, total: pages.length });
+    try {
+      await downloadPagesAsPdf(
+        pages,
+        title,
+        preset,
+        (current, total) => setPdfDownloadProgress({ current, total }),
+      );
+      showToast('PDF 다운로드가 완료되었습니다.', 'success');
+    } catch (error) {
+      logError(error, 'PublishingEditor-downloadPdf');
+      showToast('PDF 다운로드 중 오류가 발생했습니다.', 'error');
+    } finally {
+      setPdfDownloadProgress(null);
+    }
+  };
+
   const handleDownloadPdf = useCallback(async () => {
     if (preflightIssues.length > 0) {
       setShowPreflightModal(true);
@@ -1483,13 +1507,11 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
       }
     }
 
-    await downloadPagesAsPdf(
-      document.pages
-        .map((page) => pdfPageRefs.current[page.id] ?? pageRefs.current[page.id])
-        .filter((page): page is HTMLDivElement => page instanceof HTMLDivElement),
-      document.meta.title.ko,
-      document.layout.pagePreset,
-    );
+    const pagesToDownload = document.pages
+      .map((page) => pdfPageRefs.current[page.id] ?? pageRefs.current[page.id])
+      .filter((page): page is HTMLDivElement => page instanceof HTMLDivElement);
+
+    await downloadPdfWithProgress(pagesToDownload, document.meta.title.ko, document.layout.pagePreset);
   }, [alignmentWarningThresholdPx, document.layout.pagePreset, document.meta.title.ko, document.pages, preflightIssues, validationReport]);
 
   const handleConfirmPdfDownload = useCallback(async () => {
@@ -1507,14 +1529,49 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
       }
     }
 
-    await downloadPagesAsPdf(
-      document.pages
-        .map((page) => pdfPageRefs.current[page.id] ?? pageRefs.current[page.id])
-        .filter((page): page is HTMLDivElement => page instanceof HTMLDivElement),
-      document.meta.title.ko,
-      document.layout.pagePreset,
-    );
+    const pagesToDownload = document.pages
+      .map((page) => pdfPageRefs.current[page.id] ?? pageRefs.current[page.id])
+      .filter((page): page is HTMLDivElement => page instanceof HTMLDivElement);
+
+    await downloadPdfWithProgress(pagesToDownload, document.meta.title.ko, document.layout.pagePreset);
   }, [alignmentWarningThresholdPx, document.layout.pagePreset, document.meta.title.ko, document.pages, validationReport]);
+
+  const handleDownloadContributionPdf = useCallback(async (contributionId: string) => {
+    const contribution = document.contributions.find((c) => c.id === contributionId);
+    if (!contribution) return;
+
+    const chainPages = getContributionChainPages(document, contribution.pageId);
+    const pagesToDownload = chainPages
+      .map((page: PublicationPage) => pdfPageRefs.current[page.id] ?? pageRefs.current[page.id])
+      .filter((page: HTMLDivElement | undefined | null): page is HTMLDivElement => page instanceof HTMLDivElement);
+
+    const trackInfo = contribution.presentationTrackId
+      ? document.meta.presentationTracks?.find(t => t.id === contribution.presentationTrackId)
+      : null;
+    const title = trackInfo 
+      ? `[${trackInfo.prefix}] ${contribution.title}`
+      : contribution.title;
+
+    await downloadPdfWithProgress(pagesToDownload, title, document.layout.pagePreset);
+  }, [document]);
+
+  const handleDownloadTrackPdf = useCallback(async (trackId: string) => {
+    const trackInfo = document.meta.presentationTracks?.find(t => t.id === trackId);
+    if (!trackInfo) return;
+
+    const trackContributions = document.contributions.filter(c => c.presentationTrackId === trackId);
+    if (!trackContributions.length) {
+      showToast('해당 트랙에 발표자 원고가 없습니다.', 'error');
+      return;
+    }
+
+    const pagesToDownload = trackContributions
+      .flatMap((contribution) => getContributionChainPages(document, contribution.pageId))
+      .map((page) => pdfPageRefs.current[page.id] ?? pageRefs.current[page.id])
+      .filter((page): page is HTMLDivElement => page instanceof HTMLDivElement);
+
+    await downloadPdfWithProgress(pagesToDownload, `[${trackInfo.prefix}] ${trackInfo.label}`, document.layout.pagePreset);
+  }, [document]);
 
   const handleAddImage = useCallback(() => {
     const targetZoneId = imageModalZoneId ?? primaryImageZoneId;
@@ -2173,6 +2230,8 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
                   usePublishingStore.getState().rebuildAllContributionsLayout();
                   showToast('모든 원고의 레이아웃을 다시 계산하고 빈 페이지를 정리했습니다.', 'success');
                 }}
+                onDownloadContributionPdf={handleDownloadContributionPdf}
+                onDownloadTrackPdf={handleDownloadTrackPdf}
                 onStartEditSlot={handleStartContributionSlotEdit}
                 onEditingValueChange={setEditingContributionValue}
                 onEditingRunsChange={setEditingContributionRuns}
@@ -2582,6 +2641,57 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
           </div>
         </div>
       ) : null}
+      
+      {pdfDownloadProgress ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 px-4 backdrop-blur-sm transition-all duration-300">
+          <div className="w-full max-w-sm overflow-hidden rounded-[32px] bg-white p-8 shadow-2xl transform scale-100 opacity-100">
+            <div className="flex flex-col items-center text-center">
+              <div className="relative mb-6 flex h-20 w-20 items-center justify-center rounded-full bg-indigo-50">
+                <ArrowDownTrayIcon className="h-8 w-8 text-indigo-600 animate-bounce" />
+                <svg className="absolute inset-0 h-full w-full -rotate-90" viewBox="0 0 100 100">
+                  <circle
+                    className="text-slate-100 stroke-current"
+                    strokeWidth="4"
+                    cx="50"
+                    cy="50"
+                    r="46"
+                    fill="transparent"
+                  ></circle>
+                  <circle
+                    className="text-indigo-600 stroke-current transition-all duration-300 ease-out"
+                    strokeWidth="4"
+                    strokeLinecap="round"
+                    cx="50"
+                    cy="50"
+                    r="46"
+                    fill="transparent"
+                    strokeDasharray={`${(pdfDownloadProgress.current / pdfDownloadProgress.total) * 289} 289`}
+                  ></circle>
+                </svg>
+              </div>
+              <h2 className="text-2xl font-bold text-slate-900 tracking-tight">PDF 생성 중...</h2>
+              <p className="mt-3 text-sm text-slate-500 max-w-[260px] leading-relaxed">
+                고해상도 렌더링 작업을 수행하고 있습니다.
+                <br />
+                창을 닫거나 새로고침하지 마세요.
+              </p>
+              <div className="mt-8 w-full bg-slate-100 rounded-full h-3 overflow-hidden shadow-inner">
+                <div 
+                  className="bg-indigo-600 h-full rounded-full transition-all duration-300 ease-out relative overflow-hidden"
+                  style={{ width: `${Math.max(5, (pdfDownloadProgress.current / pdfDownloadProgress.total) * 100)}%` }}
+                >
+                  <div className="absolute inset-0 bg-white/20 animate-[shimmer_1.5s_infinite] w-full h-full" style={{ backgroundImage: 'linear-gradient(90deg, transparent, rgba(255,255,255,0.5), transparent)' }}></div>
+                </div>
+              </div>
+              <div className="mt-3 flex w-full justify-between items-center text-xs font-medium text-slate-400 px-1">
+                <span>{pdfDownloadProgress.current} 페이지 완료</span>
+                <span>총 {pdfDownloadProgress.total} 페이지</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       <div className="pointer-events-none absolute left-[-99999px] top-0 opacity-0">
         {document.pages.map((page, pageIndex) => (
           <PublishingPagePreview

@@ -23,6 +23,8 @@ interface SpeakerContributionPanelProps {
   onMoveContribution: (contributionId: string, direction: 'up' | 'down') => void;
   onDeleteContribution: (contributionId: string) => void;
   onRebuildAllLayouts: () => void;
+  onDownloadContributionPdf: (contributionId: string) => void;
+  onDownloadTrackPdf: (trackId: string) => void;
   onStartEditSlot: (slotKey: string, runs: TextRun[]) => void;
   onEditingValueChange: (value: string) => void;
   onEditingRunsChange: (runs: TextRun[]) => void;
@@ -48,6 +50,8 @@ const SpeakerContributionPanel: React.FC<SpeakerContributionPanelProps> = ({
   onMoveContribution,
   onDeleteContribution,
   onRebuildAllLayouts,
+  onDownloadContributionPdf,
+  onDownloadTrackPdf,
   onStartEditSlot,
   onEditingValueChange,
   onEditingRunsChange,
@@ -219,7 +223,22 @@ const SpeakerContributionPanel: React.FC<SpeakerContributionPanelProps> = ({
         {showPresentationTracks ? (
           <div className="mb-3 flex-shrink-0 rounded-2xl border border-slate-200 bg-white p-3">
             <label className="block">
-              <span className="mb-2 block text-xs font-semibold text-slate-500">발표 트랙 목록</span>
+              <div className="mb-2 flex items-center justify-between">
+                <span className="block text-xs font-semibold text-slate-500">발표 트랙 목록</span>
+                {trackFilter !== 'all' && trackFilter !== 'unassigned' ? (
+                  <button
+                    type="button"
+                    onClick={() => onDownloadTrackPdf(trackFilter)}
+                    className="flex items-center gap-1 rounded-full bg-slate-100 px-2 py-1 text-[10px] font-semibold text-slate-600 hover:bg-slate-200 transition"
+                    title="현재 선택된 트랙의 원고만 모아서 PDF로 다운로드합니다"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="h-3 w-3">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
+                    </svg>
+                    트랙 PDF 다운로드
+                  </button>
+                ) : null}
+              </div>
               <select
                 value={trackFilter}
                 onChange={(event) => setTrackFilter(event.target.value)}
@@ -389,6 +408,18 @@ const SpeakerContributionPanel: React.FC<SpeakerContributionPanelProps> = ({
           >
             완료 저장
           </button>
+          
+          <button
+            type="button"
+            onClick={() => onDownloadContributionPdf(selectedContribution.id)}
+            className="mb-3 shrink-0 w-full flex items-center justify-center gap-2 rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="h-4 w-4">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
+            </svg>
+            현재 원고만 PDF 다운로드
+          </button>
+
           {showPresentationTracks ? (
             <div className="mb-3 shrink-0 rounded-2xl border border-slate-200 bg-white p-3">
               <div className="mb-2 flex items-center justify-between gap-3">

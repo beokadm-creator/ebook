@@ -107,6 +107,7 @@ export const downloadPagesAsPdf = async (
   pages: HTMLElement[],
   title: string,
   preset?: PagePreset,
+  onProgress?: (current: number, total: number) => void,
 ) => {
   if (!pages.length) {
     return;
@@ -134,6 +135,9 @@ export const downloadPagesAsPdf = async (
     const page = pages[index];
     const restoreImages = await inlineImagesForCapture(page);
     try {
+      if (onProgress) {
+        onProgress(index, pages.length);
+      }
       await waitForImages(page);
       const canvas = await html2canvas(page, {
         scale: Math.max(2, window.devicePixelRatio || 1),
@@ -182,5 +186,8 @@ export const downloadPagesAsPdf = async (
     }
   }
 
+  if (onProgress) {
+    onProgress(pages.length, pages.length);
+  }
   pdf.save(`${sanitizedTitle}.pdf`);
 };

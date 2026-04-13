@@ -130,7 +130,7 @@ const createThreadSegmentBlock = (
   ebook: thread.ebook,
 });
 
-const getContributionChainPages = (document: PublishingDocument, contributionPageId: string) =>
+export const getContributionChainPages = (document: PublishingDocument, contributionPageId: string) =>
   document.pages.filter((page) => getChainRootPageId(document, page.id) === contributionPageId);
 
 const countMatches = (value: string, pattern: RegExp) => value.match(pattern)?.length ?? 0;
