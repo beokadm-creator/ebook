@@ -149,7 +149,7 @@ const getTextDensityProfile = (sampleText: string, slotKey: string) => {
 
   if (!normalizedText) {
     return {
-      averageCharWidthEm: slotKey.includes('_en') ? 0.92 : 1.02,
+      averageCharWidthEm: slotKey.includes('_en') ? 0.55 : 1.02,
       fillRatio: slotKey.startsWith('body') ? 0.58 : 0.76,
       paragraphPenalty: 0.96,
     };
@@ -157,7 +157,7 @@ const getTextDensityProfile = (sampleText: string, slotKey: string) => {
 
   const totalMeasuredChars = Math.max(1, cjkCount + latinCount);
   const cjkRatio = cjkCount / totalMeasuredChars;
-  const averageCharWidthEm = cjkRatio >= 0.45 ? 1.02 : 0.92;
+  const averageCharWidthEm = cjkRatio >= 0.45 ? 1.02 : 0.55;
   const baseFillRatio = slotKey.startsWith('body')
     ? (cjkRatio >= 0.45 ? 0.58 : 0.58) // Use same fill ratio for English to prevent unexpected pagination
     : 0.78;

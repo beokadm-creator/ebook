@@ -10,7 +10,7 @@ import {
   rebuildContributionLayout,
   sortFlowZonesForReadingOrder,
 } from '@/lib/publishing/contributionLayout';
-import { DEFAULT_PRESENTATION_TRACKS, createImageZone, createInitialPublishingDocument, createMainBodyZone, createSpeakerThreadZones, getThreadPlainText } from '@/lib/publishing/defaultDocument';
+import { DEFAULT_PRESENTATION_TRACKS, createImageZone, createInitialPublishingDocument, createMainBodyZone, createSpeakerThreadZones } from '@/lib/publishing/defaultDocument';
 import { normalizeStructuredBodyText, parseAuthorTextToRuns } from '@/lib/publishing/structuredLabels';
 import { applyPresetToMaster, TemplatePresetKey } from '@/lib/publishing/templatePresets';
 import { rehydrateContributionThreadText } from '@/lib/publishing/threadTextSerialization';
@@ -2291,10 +2291,11 @@ export const usePublishingStore = create<PublishingStore>()((set, get) => ({
 
       if (nextDocument === state.document) return state;
 
-      const currentPlainText = getThreadPlainText(state.document, threadId);
-      if (currentPlainText === text) {
-        return state;
-      }
+      // const currentPlainText = getThreadPlainText(state.document, threadId);
+      // Force update by removing the early return so the layout engine can process cleanup properly
+      // if (currentPlainText === text) {
+      //   return state;
+      // }
 
       const next = pushHistoryEntry(state, `Update ${threadId}`, nextDocument);
       const invalidatedThreadIds = Array.from(new Set([...state.pagination.invalidatedThreadIds, threadId]));
@@ -2329,9 +2330,10 @@ export const usePublishingStore = create<PublishingStore>()((set, get) => ({
         draft.meta.updatedAt = new Date().toISOString();
       });
 
-      if (nextDocument === state.document) return state;
-
       const next = pushHistoryEntry(state, `Update runs ${threadId}`, nextDocument);
+      // Force update by removing the early return so the layout engine can process cleanup properly
+      // if (nextDocument === state.document) return state;
+
       const invalidatedThreadIds = Array.from(new Set([...state.pagination.invalidatedThreadIds, threadId]));
 
       return {
@@ -2663,6 +2665,7 @@ export const usePublishingStore = create<PublishingStore>()((set, get) => ({
       if (nextDocument === state.document) return state;
 
       const targetThreadId = existingThreadId ?? newThreadId;
+      // Force state update by creating a new document reference even if canonicalText hasn't changed conceptually
       const next = pushHistoryEntry(state, existingThreadId ? `Replace thread ${targetThreadId}` : `Add thread ${targetThreadId}`, nextDocument);
       const invalidatedThreadIds = Array.from(new Set([...state.pagination.invalidatedThreadIds, targetThreadId]));
 
@@ -3161,7 +3164,13 @@ export const usePublishingStore = create<PublishingStore>()((set, get) => ({
 
         const thread = findThreadForContributionSlot(draft, contribution, slotKey);
         if (thread && normalizedText) {
-          thread.canonicalText = (slotKey === 'authors_ko' || slotKey === 'authors_en') ? parseAuthorTextToRuns(normalizedText) : [{ text: normalizedText }];
+          const isSame = thread.canonicalText.map(r => r.text).join('') === normalizedText;
+          if (isSame) {
+            // Text is exactly the same, but we still need to force rebuild layout to ensure cleanup of duplicated/overflow pages
+            thread.canonicalText = [...thread.canonicalText];
+          } else {
+            thread.canonicalText = (slotKey === 'authors_ko' || slotKey === 'authors_en') ? parseAuthorTextToRuns(normalizedText) : [{ text: normalizedText }];
+          }
           thread.semanticRole = resolvedSlot.role;
           thread.styleOverride = getRoleStyleOverride(resolvedSlot.role);
         } else if (thread && !normalizedText) {
@@ -3200,6 +3209,7 @@ export const usePublishingStore = create<PublishingStore>()((set, get) => ({
       if (nextDocument === state.document) return state;
       const thread = findThreadForContributionSlot(state.document, state.document.contributions.find(c => c.id === contributionId)!, slotKey);
 
+      // Force state update by creating a new document reference even if canonicalText hasn't changed conceptually
       const next = pushHistoryEntry(state, `Update contribution slot ${slotKey}`, nextDocument);
 
       return {
@@ -3273,7 +3283,13 @@ export const usePublishingStore = create<PublishingStore>()((set, get) => ({
         }));
         const thread = findThreadForContributionSlot(draft, contribution, slotKey);
         if (thread && normalizedText) {
-          thread.canonicalText = sanitizedRuns;
+          const isSame = thread.canonicalText.map(r => r.text).join('') === sanitizedRuns.map(r => r.text).join('');
+          if (isSame) {
+            // Force reference change to trigger react renders & pagination updates
+            thread.canonicalText = [...thread.canonicalText];
+          } else {
+            thread.canonicalText = sanitizedRuns;
+          }
           thread.semanticRole = resolvedSlot.role;
           thread.styleOverride = getRoleStyleOverride(resolvedSlot.role);
         } else if (thread && !normalizedText) {
@@ -3312,6 +3328,7 @@ export const usePublishingStore = create<PublishingStore>()((set, get) => ({
       if (nextDocument === state.document) return state;
       const thread = findThreadForContributionSlot(state.document, state.document.contributions.find(c => c.id === contributionId)!, slotKey);
 
+      // Force state update by creating a new document reference even if canonicalText hasn't changed conceptually
       const next = pushHistoryEntry(state, `Update contribution runs ${slotKey}`, nextDocument);
 
       return {
