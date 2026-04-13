@@ -7,6 +7,7 @@ import {
   getFlowStartZoneId,
   inferZoneSlotKey,
   normalizeContributionOrder,
+  rebuildAllContributionLayouts,
   rebuildContributionLayout,
   sortFlowZonesForReadingOrder,
 } from '@/lib/publishing/contributionLayout';
@@ -3432,9 +3433,7 @@ export const usePublishingStore = create<PublishingStore>()((set, get) => ({
   rebuildAllContributionsLayout: () =>
     set((state) => {
       const nextDocument = produce(state.document, (draft) => {
-        (draft.contributions ?? []).forEach((contribution) => {
-          rebuildContributionLayout(draft, contribution, createPageFromMaster);
-        });
+        rebuildAllContributionLayouts(draft, createPageFromMaster);
         draft.meta.updatedAt = new Date().toISOString();
         syncTocFromThreads(draft);
       });
