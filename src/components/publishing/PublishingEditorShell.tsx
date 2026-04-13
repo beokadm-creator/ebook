@@ -2169,6 +2169,10 @@ const PublishingEditorShell: React.FC<PublishingEditorShellProps> = ({ publicati
                   deleteContribution(contributionId);
                   showToast('발표자 원고를 삭제했습니다.', 'success');
                 }}
+                onRebuildAllLayouts={() => {
+                  usePublishingStore.getState().rebuildAllContributionsLayout();
+                  showToast('모든 원고의 레이아웃을 다시 계산하고 빈 페이지를 정리했습니다.', 'success');
+                }}
                 onStartEditSlot={handleStartContributionSlotEdit}
                 onEditingValueChange={setEditingContributionValue}
                 onEditingRunsChange={setEditingContributionRuns}

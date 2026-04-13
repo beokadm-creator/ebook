@@ -149,6 +149,7 @@ interface PublishingStore extends PublishingEditorState {
   updateContributionPresentationTrack: (contributionId: string, trackId: string) => void;
   updateContributionStatus: (contributionId: string, status: 'draft' | 'completed') => void;
   moveContribution: (contributionId: string, direction: 'up' | 'down') => void;
+  rebuildAllContributionsLayout: () => void;
   deleteContribution: (contributionId: string) => void;
   addImageBlock: (
     pageId: string,
@@ -3424,6 +3425,30 @@ export const usePublishingStore = create<PublishingStore>()((set, get) => ({
           zoneId: nextDocument.pages.find((page) => page.id === moved.pageId)?.zones[0]?.zoneId ?? null,
           blockId: null,
         } : state.selection,
+        ...next,
+      };
+    }),
+
+  rebuildAllContributionsLayout: () =>
+    set((state) => {
+      const nextDocument = produce(state.document, (draft) => {
+        (draft.contributions ?? []).forEach((contribution) => {
+          rebuildContributionLayout(draft, contribution, createPageFromMaster);
+        });
+        draft.meta.updatedAt = new Date().toISOString();
+        syncTocFromThreads(draft);
+      });
+
+      if (nextDocument === state.document) return state;
+
+      const next = pushHistoryEntry(state, 'Rebuild all contributions layout', nextDocument);
+      return {
+        ...state,
+        document: nextDocument,
+        pagination: {
+          ...state.pagination,
+          invalidatedThreadIds: Array.from(new Set([...state.pagination.invalidatedThreadIds, ...nextDocument.threads.map((thread) => thread.id)])),
+        },
         ...next,
       };
     }),
