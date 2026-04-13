@@ -159,7 +159,7 @@ const getTextDensityProfile = (sampleText: string, slotKey: string) => {
   const cjkRatio = cjkCount / totalMeasuredChars;
   const averageCharWidthEm = cjkRatio >= 0.45 ? 1.02 : 0.92;
   const baseFillRatio = slotKey.startsWith('body')
-    ? (cjkRatio >= 0.45 ? 0.58 : 0.46)
+    ? (cjkRatio >= 0.45 ? 0.58 : 0.58) // Use same fill ratio for English to prevent unexpected pagination
     : 0.78;
   const paragraphPenalty = Math.max(0.72, 1 - (paragraphCount - 1) * 0.04);
 
