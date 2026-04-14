@@ -1349,32 +1349,22 @@ export const usePublishingStore = create<PublishingStore>()((set, get) => ({
   importGlobalMasters: (newMasters) =>
     set((state) => {
       const nextDocument = produce(state.document, (draft) => {
-        const existingIds = new Set(draft.masters.items.map((m) => m.id));
-        let addedCount = 0;
+        let importedCount = 0;
 
         newMasters.forEach((master) => {
-          if (!existingIds.has(master.id)) {
-            // ID가 로컬에 없는 경우 그대로 추가
+          const existingIndex = draft.masters.items.findIndex((m) => m.id === master.id);
+          if (existingIndex === -1) {
+            // 로컬에 없는 마스터는 그대로 추가
             draft.masters.items.push(clone(master));
-            addedCount += 1;
+            importedCount += 1;
           } else {
-            // ID가 이미 로컬에 존재하는 경우, 새 복사본으로 추가 (옵션 1)
-            const duplicatedMaster = clone(master);
-            duplicatedMaster.id = createId('master');
-            duplicatedMaster.name = `${master.name} (Global)`;
-            duplicatedMaster.locked = false;
-            duplicatedMaster.decorations = duplicatedMaster.decorations.map((decoration) => ({
-              ...decoration,
-              id: createId('decoration'),
-            }));
-            duplicatedMaster.contentZones = duplicatedMaster.contentZones.map((zone) => renameZoneForMaster(zone));
-            
-            draft.masters.items.push(duplicatedMaster);
-            addedCount += 1;
+            // 로컬에 이미 있는 마스터는 전역 마스터의 설정(속성) 그대로 완벽하게 덮어쓰기 (업데이트)
+            draft.masters.items[existingIndex] = clone(master);
+            importedCount += 1;
           }
         });
 
-        if (addedCount > 0) {
+        if (importedCount > 0) {
           draft.meta.updatedAt = new Date().toISOString();
         }
       });
