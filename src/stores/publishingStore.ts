@@ -1372,11 +1372,9 @@ export const usePublishingStore = create<PublishingStore>()((set, get) => ({
         newMasters.forEach((master) => {
           const existingIndex = draft.masters.items.findIndex((m) => m.id === master.id);
           if (existingIndex === -1) {
-            // 로컬에 없는 마스터는 그대로 추가
             draft.masters.items.push(clone(master));
             importedCount += 1;
           } else {
-            // 로컬에 이미 있는 마스터는 전역 마스터의 설정(속성) 그대로 완벽하게 덮어쓰기 (업데이트)
             draft.masters.items[existingIndex] = clone(master);
             importedCount += 1;
           }
@@ -1384,6 +1382,25 @@ export const usePublishingStore = create<PublishingStore>()((set, get) => ({
 
         if (importedCount > 0) {
           draft.meta.updatedAt = new Date().toISOString();
+
+          // 마스터 템플릿을 덮어쓸 때, 기존 스레드(본문 데이터)에 잘못 저장된 볼드 오버라이드도 함께 정리합니다.
+          draft.threads.forEach((thread) => {
+            if (thread.semanticRole === 'paragraph' && (thread.sourceZoneId.includes('body') || thread.id.includes('body'))) {
+              // 1. 스레드 자체의 폰트 두께 강제 오버라이드 제거
+              if (thread.styleOverride) {
+                thread.styleOverride.fontWeight = undefined;
+                thread.styleOverride.fontFamily = undefined;
+              }
+              // 2. 텍스트 내부(TextRun)에 부분적으로 적용된 볼드 마크(강제 굵은글씨) 일괄 해제
+              if (Array.isArray(thread.canonicalText)) {
+                thread.canonicalText.forEach((run) => {
+                  if (run.marks) {
+                    run.marks.bold = undefined;
+                  }
+                });
+              }
+            }
+          });
         }
       });
 
