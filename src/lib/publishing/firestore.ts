@@ -165,7 +165,20 @@ const resolveCompatibleGlobalMasters = (
   globalMasters?.items.forEach((master) => {
     master.contentZones?.forEach((zone) => {
       if (zone.style) {
-        zone.style.fontWeight = Number(zone.style.fontWeight) || 400;
+        let weight = Number(zone.style.fontWeight) || 400;
+        // 강제로 본문(body) 영역은 400(Regular)으로 고정하여 의도치 않은 볼드체 방지
+        if (zone.id.includes('body') || zone.slotKey?.includes('body')) {
+          weight = 400;
+          if (zone.style.fontFamily === 'NanumSquareBold' || zone.style.fontFamily === 'NanumSquareExtraBold') {
+            zone.style.fontFamily = 'NanumSquare';
+          }
+        }
+        zone.style.fontWeight = weight;
+      }
+    });
+    master.decorations?.forEach((decoration) => {
+      if (decoration.style && decoration.style.fontWeight !== undefined) {
+        decoration.style.fontWeight = Number(decoration.style.fontWeight) || 400;
       }
     });
   });
