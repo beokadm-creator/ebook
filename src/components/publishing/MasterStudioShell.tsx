@@ -449,9 +449,9 @@ const MasterStudioShell: React.FC<MasterStudioShellProps> = ({ publicationId, on
       const nextCount = usePublishingStore.getState().document.masters.items.length;
       
       if (nextCount > previousCount) {
-        showToast(`글로벌 마스터 ${nextCount - previousCount}개를 가져왔습니다.`, 'success');
+        showToast(`글로벌 마스터 ${nextCount - previousCount}개를 복사하여 가져왔습니다.`, 'success');
       } else {
-        showToast('모든 글로벌 마스터가 이미 로컬에 존재합니다.', 'info');
+        showToast('가져올 글로벌 마스터가 없습니다.', 'info');
       }
     } catch (error) {
       logError(error, 'MasterStudio-import-global');

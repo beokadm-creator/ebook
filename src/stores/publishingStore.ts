@@ -1354,7 +1354,22 @@ export const usePublishingStore = create<PublishingStore>()((set, get) => ({
 
         newMasters.forEach((master) => {
           if (!existingIds.has(master.id)) {
+            // ID가 로컬에 없는 경우 그대로 추가
             draft.masters.items.push(clone(master));
+            addedCount += 1;
+          } else {
+            // ID가 이미 로컬에 존재하는 경우, 새 복사본으로 추가 (옵션 1)
+            const duplicatedMaster = clone(master);
+            duplicatedMaster.id = createId('master');
+            duplicatedMaster.name = `${master.name} (Global)`;
+            duplicatedMaster.locked = false;
+            duplicatedMaster.decorations = duplicatedMaster.decorations.map((decoration) => ({
+              ...decoration,
+              id: createId('decoration'),
+            }));
+            duplicatedMaster.contentZones = duplicatedMaster.contentZones.map((zone) => renameZoneForMaster(zone));
+            
+            draft.masters.items.push(duplicatedMaster);
             addedCount += 1;
           }
         });
