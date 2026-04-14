@@ -106,6 +106,7 @@ interface PublishingStore extends PublishingEditorState {
       allowThreadContinuation?: boolean;
     }>,
   ) => void;
+  importGlobalMasters: (masters: PublishingDocument['masters']['items']) => void;
   addMasterTextDecoration: (masterId: string) => void;
   addMasterShapeDecoration: (masterId: string) => void;
   addMasterImageDecoration: (
@@ -1338,6 +1339,34 @@ export const usePublishingStore = create<PublishingStore>()((set, get) => ({
       if (nextDocument === state.document) return state;
 
       const next = pushHistoryEntry(state, `Duplicate master ${masterId}`, nextDocument);
+      return {
+        ...state,
+        document: nextDocument,
+        ...next,
+      };
+    }),
+
+  importGlobalMasters: (newMasters) =>
+    set((state) => {
+      const nextDocument = produce(state.document, (draft) => {
+        const existingIds = new Set(draft.masters.items.map((m) => m.id));
+        let addedCount = 0;
+
+        newMasters.forEach((master) => {
+          if (!existingIds.has(master.id)) {
+            draft.masters.items.push(clone(master));
+            addedCount += 1;
+          }
+        });
+
+        if (addedCount > 0) {
+          draft.meta.updatedAt = new Date().toISOString();
+        }
+      });
+
+      if (nextDocument === state.document) return state;
+
+      const next = pushHistoryEntry(state, 'Import global masters', nextDocument);
       return {
         ...state,
         document: nextDocument,

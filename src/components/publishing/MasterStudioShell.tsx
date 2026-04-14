@@ -7,7 +7,9 @@ import {
   PlusIcon,
   Squares2X2Icon,
   TrashIcon,
+  ArrowDownTrayIcon,
 } from '@heroicons/react/24/outline';
+import { fetchGlobalMasterLibrary } from '@/lib/publishing/firestore';
 import { getRenderableImageUrl, uploadMasterImage } from '@/lib/publishing/assets';
 import { formatMm, pxToMm } from '@/lib/publishing/a4';
 import { TEMPLATE_PRESET_DESCRIPTIONS, TEMPLATE_PRESET_LABELS, TemplatePresetKey } from '@/lib/publishing/templatePresets';
@@ -433,6 +435,30 @@ const MasterStudioShell: React.FC<MasterStudioShellProps> = ({ publicationId, on
     showToast('마스터를 만들었습니다.', 'success');
   }, [createMaster, newMasterName, newMasterPreset]);
 
+  const handleImportGlobalMaster = useCallback(async () => {
+    try {
+      const globalMasters = await fetchGlobalMasterLibrary();
+      if (!globalMasters || !globalMasters.items.length) {
+        showToast('저장된 글로벌 마스터가 없습니다.', 'info');
+        return;
+      }
+      
+      const { importGlobalMasters } = usePublishingStore.getState();
+      const previousCount = usePublishingStore.getState().document.masters.items.length;
+      importGlobalMasters(globalMasters.items);
+      const nextCount = usePublishingStore.getState().document.masters.items.length;
+      
+      if (nextCount > previousCount) {
+        showToast(`글로벌 마스터 ${nextCount - previousCount}개를 가져왔습니다.`, 'success');
+      } else {
+        showToast('모든 글로벌 마스터가 이미 로컬에 존재합니다.', 'info');
+      }
+    } catch (error) {
+      logError(error, 'MasterStudio-import-global');
+      showToast('글로벌 마스터를 가져오지 못했습니다.', 'error');
+    }
+  }, []);
+
   const handleUploadMasterFile = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file || !selectedMaster) {
@@ -544,6 +570,14 @@ const MasterStudioShell: React.FC<MasterStudioShellProps> = ({ publicationId, on
             >
               {autosave.lastError ? '저장 실패' : autosave.isSaving ? '저장 중' : autosave.dirty ? '저장 필요' : '저장 완료'}
             </div>
+            <button
+              type="button"
+              onClick={handleImportGlobalMaster}
+              className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 transition"
+            >
+              <ArrowDownTrayIcon className="h-4 w-4" />
+              전역 마스터 불러오기
+            </button>
             <button
               type="button"
               onClick={() => void onSaveMaster()}

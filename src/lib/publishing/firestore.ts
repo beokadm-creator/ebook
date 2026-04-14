@@ -651,6 +651,20 @@ export const loadPublishingThreads = async (publicationId: string): Promise<Publ
   return [];
 };
 
+export const fetchGlobalMasterLibrary = async () => {
+  try {
+    const snap = await getDoc(masterLibraryRef());
+    if (!snap.exists()) {
+      return null;
+    }
+    const data = snap.data() as PublishingMasterLibraryDoc;
+    return resolveCompatibleGlobalMasters(data.masters);
+  } catch (error) {
+    console.warn('[publishing] failed to fetch global master library', error);
+    return null;
+  }
+};
+
 export const savePublishingDocument = async (
   publicationId: string,
   documentState: PublishingDocument,
