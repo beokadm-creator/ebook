@@ -375,17 +375,22 @@ export const savePublishingMasters = async (
     );
   });
 
-  if (persistGlobalMasters) {
-    operations.push((batch) => {
-      batch.set(masterLibraryRef(), stripUndefinedDeep({
-        masters,
-        updatedAt: new Date().toISOString(),
-        schemaVersion: 1,
-      } satisfies PublishingMasterLibraryDoc));
-    });
-  }
-
   await commitOperations(operations);
+
+  if (persistGlobalMasters) {
+    try {
+      await setDoc(
+        masterLibraryRef(),
+        stripUndefinedDeep({
+          masters,
+          updatedAt: new Date().toISOString(),
+          schemaVersion: 1,
+        } satisfies PublishingMasterLibraryDoc),
+      );
+    } catch (error) {
+      console.warn('[publishing] failed to persist global master library', error);
+    }
+  }
 };
 
 export const savePublishingPages = async (
@@ -579,13 +584,17 @@ export const loadPublishingDocument = async (publicationId: string) => {
 
   const meta = metaSnap.data() as PublishingMetaDoc;
   if (!globalMasters && meta.masters) {
-    await setDoc(
-      masterLibraryRef(),
-      stripUndefinedDeep({
-        masters: meta.masters,
-        updatedAt: new Date().toISOString(),
-      } satisfies PublishingMasterLibraryDoc),
-    );
+    try {
+      await setDoc(
+        masterLibraryRef(),
+        stripUndefinedDeep({
+          masters: meta.masters,
+          updatedAt: new Date().toISOString(),
+        } satisfies PublishingMasterLibraryDoc),
+      );
+    } catch (error) {
+      console.warn('[publishing] failed to backfill global master library', error);
+    }
   }
   const pages = pageSnaps.docs.map((item) => item.data()) as PublishingDocument['pages'];
   const contributions = contributionSnaps.docs.map((item) => item.data()) as PublishingDocument['contributions'];
@@ -662,17 +671,6 @@ export const savePublishingDocument = async (
   operations.push((batch) => {
     batch.set(metaRef(publicationId), sanitizedMeta);
   });
-  if (persistGlobalMasters) {
-    operations.push((batch) => {
-      batch.set(masterLibraryRef(), stripUndefinedDeep({
-        masters: documentState.masters,
-        updatedAt: new Date().toISOString(),
-        schemaVersion: 1,
-        sourcePublicationTypes: [documentState.meta.sourcePublicationType].filter(Boolean),
-        publicationTypes: [documentState.meta.publicationType].filter(Boolean),
-      } satisfies PublishingMasterLibraryDoc));
-    });
-  }
 
   appendCollectionSyncOperations(
     operations,
@@ -718,4 +716,21 @@ export const savePublishingDocument = async (
     );
   });
   await commitOperations(operations);
+
+  if (persistGlobalMasters) {
+    try {
+      await setDoc(
+        masterLibraryRef(),
+        stripUndefinedDeep({
+          masters: documentState.masters,
+          updatedAt: new Date().toISOString(),
+          schemaVersion: 1,
+          sourcePublicationTypes: [documentState.meta.sourcePublicationType].filter(Boolean),
+          publicationTypes: [documentState.meta.publicationType].filter(Boolean),
+        } satisfies PublishingMasterLibraryDoc),
+      );
+    } catch (error) {
+      console.warn('[publishing] failed to persist global master library', error);
+    }
+  }
 };

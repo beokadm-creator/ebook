@@ -513,6 +513,17 @@ const renameZoneForMaster = (zone: PublishingDocument['masters']['items'][number
   id: createId(zone.id || 'zone'),
 });
 
+const renameDecorationForMaster = (decoration: PublishingDocument['masters']['items'][number]['decorations'][number]) => {
+  if (decoration.scope === 'global-fixed') {
+    return decoration;
+  }
+
+  return {
+    ...decoration,
+    id: createId(decoration.id || 'decoration'),
+  };
+};
+
 const getRoleStyleOverride = (role: TextRole) => {
   switch (role) {
     case 'title':
@@ -1195,6 +1206,7 @@ export const usePublishingStore = create<PublishingStore>()((set, get) => ({
 
         applyPresetToMaster(newMaster, preset);
         newMaster.contentZones = newMaster.contentZones.map((zone) => renameZoneForMaster(zone));
+        newMaster.decorations = newMaster.decorations.map((decoration) => renameDecorationForMaster(decoration));
 
         draft.masters.items.push(newMaster);
         draft.meta.updatedAt = new Date().toISOString();
@@ -1491,6 +1503,7 @@ export const usePublishingStore = create<PublishingStore>()((set, get) => ({
         }
 
         applyPresetToMaster(master, preset);
+        master.decorations = master.decorations.map((decoration) => renameDecorationForMaster(decoration));
         draft.pages.forEach((page) => {
           if (page.masterId === masterId) {
             master.contentZones.forEach((zone) => {
@@ -1992,7 +2005,7 @@ export const usePublishingStore = create<PublishingStore>()((set, get) => ({
         }
 
         master.decorations.push({
-          id: `decoration_${Date.now()}`,
+          id: createId('decoration'),
           type: 'text',
           locked: false,
           scope: 'template-fixed',
@@ -2024,7 +2037,7 @@ export const usePublishingStore = create<PublishingStore>()((set, get) => ({
         }
 
         master.decorations.push({
-          id: `decoration_${Date.now()}`,
+          id: createId('decoration'),
           type: 'shape',
           locked: false,
           scope: 'template-fixed',
@@ -2063,7 +2076,7 @@ export const usePublishingStore = create<PublishingStore>()((set, get) => ({
         const baseHeight = Math.max(48, Math.round(baseWidth * aspectRatio));
 
         master.decorations.push({
-          id: `decoration_${Date.now()}`,
+          id: createId('decoration'),
           type: 'image',
           locked: false,
           scope: 'template-fixed',
@@ -3285,7 +3298,7 @@ export const usePublishingStore = create<PublishingStore>()((set, get) => ({
         }));
         const thread = findThreadForContributionSlot(draft, contribution, slotKey);
         if (thread && normalizedText) {
-          const isSame = thread.canonicalText.map(r => r.text).join('') === sanitizedRuns.map(r => r.text).join('');
+          const isSame = JSON.stringify(thread.canonicalText) === JSON.stringify(sanitizedRuns);
           if (isSame) {
             // Force reference change to trigger react renders & pagination updates
             thread.canonicalText = [...thread.canonicalText];

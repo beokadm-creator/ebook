@@ -109,6 +109,24 @@ const extractRunsFromNode = (node: Node, inherited: TextMarkSet = {}): TextRun[]
   if (tag === 'sup') {
     marks.superscript = true;
   }
+  const fontWeight = node.style.fontWeight;
+  if (fontWeight) {
+    const numericWeight = Number.parseInt(fontWeight, 10);
+    if (fontWeight === 'bold' || (Number.isFinite(numericWeight) && numericWeight >= 600)) {
+      marks.bold = true;
+    }
+  }
+  const fontStyle = node.style.fontStyle;
+  if (fontStyle === 'italic' || fontStyle === 'oblique') {
+    marks.italic = true;
+  }
+  const textDecoration = node.style.textDecoration || node.style.textDecorationLine;
+  if (textDecoration && textDecoration.includes('underline')) {
+    marks.underline = true;
+  }
+  if (node.style.verticalAlign === 'super') {
+    marks.superscript = true;
+  }
   if (tag === 'br') {
     return [{ text: '\n', marks: inherited }];
   }
