@@ -509,10 +509,28 @@ const createPageFromMaster = (
   };
 };
 
-const renameZoneForMaster = (zone: PublishingDocument['masters']['items'][number]['contentZones'][number]) => ({
-  ...zone,
-  id: createId(zone.id || 'zone'),
-});
+const renameZoneForMaster = (zone: PublishingDocument['masters']['items'][number]['contentZones'][number]) => {
+  const newStyle = zone.style
+    ? {
+        ...zone.style,
+        fontWeight: Number(zone.style.fontWeight) || 400,
+      }
+    : {
+        fontFamily: 'Noto Serif KR',
+        fontSize: 14,
+        fontWeight: 400,
+        lineHeight: 1.6,
+        letterSpacing: -0.02,
+        textAlign: 'left' as const,
+        color: '#000000',
+      };
+
+  return {
+    ...zone,
+    id: createId(zone.id || 'zone'),
+    style: newStyle,
+  };
+};
 
 const renameDecorationForMaster = (decoration: PublishingDocument['masters']['items'][number]['decorations'][number]) => {
   if (decoration.scope === 'global-fixed') {

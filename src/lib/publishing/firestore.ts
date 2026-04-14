@@ -162,6 +162,14 @@ const resolveCompatibleGlobalMasters = (
     return null;
   }
 
+  globalMasters?.items.forEach((master) => {
+    master.contentZones?.forEach((zone) => {
+      if (zone.style) {
+        zone.style.fontWeight = Number(zone.style.fontWeight) || 400;
+      }
+    });
+  });
+
   return globalMasters;
 };
 
