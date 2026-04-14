@@ -143,7 +143,7 @@ const isCompatibleMasterSet = (
   }
 
   const allZonesValid = masters.items.every((master) =>
-    master.contentZones.length > 0 && master.contentZones.every((zone) => Boolean(zone.id) && Boolean(zone.frame)),
+    (master.contentZones || []).every((zone) => Boolean(zone.id) && Boolean(zone.frame)),
   );
   if (!allZonesValid) {
     return false;
