@@ -102,6 +102,16 @@ const MasterStudioPage: React.FC = () => {
 
     saveTimer.current = window.setTimeout(() => {
       markSaving();
+      // Firestore 저장 전에 로컬 스토리지에 안전하게 임시 저장 (오프라인 데이터 유실 방지)
+      window.localStorage.setItem(getDraftKey(publicationId), JSON.stringify(documentState));
+
+      if (!navigator.onLine) {
+        // 오프라인 상태일 경우 Firestore 시도 없이 즉시 실패 처리하여 로컬 초안을 유지
+        markSaveFailed('오프라인 상태로 인해 로컬에만 임시 저장되었습니다.');
+        showToast('인터넷 연결이 끊겨 오프라인 모드로 저장되었습니다.', 'warning');
+        return;
+      }
+
       void saveMasterStudioWorkspaceDelta(publicationId, lastSavedDocumentRef.current, documentState, { persistGlobalMasters: true })
         .then(() => {
           lastSavedDocumentRef.current = structuredClone(documentState);
@@ -111,7 +121,7 @@ const MasterStudioPage: React.FC = () => {
         .catch((error) => {
           logError(error, 'MasterStudio-autosave');
           markSaveFailed('저장 실패');
-          showToast('마스터 저장에 실패했습니다.', 'error');
+          showToast('마스터 저장에 실패했습니다. 로컬에 안전하게 보관 중입니다.', 'error');
         });
     }, 1500);
 

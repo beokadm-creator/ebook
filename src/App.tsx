@@ -25,16 +25,8 @@ function AppRoutes() {
       <Route path="/conferences/:conferenceId" element={<ConferenceDetail />} />
       <Route path="/viewer/:publicationId" element={<ViewerPage />} />
       <Route path="/mypage" element={<MyPage />} />
-      <Route path="/editor/:publicationId" element={
-        <OnlineOnly>
-          <EditorPage />
-        </OnlineOnly>
-      } />
-      <Route path="/studio/:publicationId" element={
-        <OnlineOnly>
-          <MasterStudioPage />
-        </OnlineOnly>
-      } />
+      <Route path="/editor/:publicationId" element={<EditorPage />} />
+      <Route path="/studio/:publicationId" element={<MasterStudioPage />} />
       <Route path="/admin" element={<ProtectedRoute><ConferenceManagement /></ProtectedRoute>} />
       <Route path="*" element={
         <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900 px-4">

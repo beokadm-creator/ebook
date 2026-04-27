@@ -139,9 +139,9 @@ const extractRunsFromNode = (node: Node, inherited: TextMarkSet = {}): TextRun[]
 };
 
 export const htmlToTextRuns = (html: string) => {
-  const container = document.createElement('div');
-  container.innerHTML = html;
-  const rawRuns = Array.from(container.childNodes).flatMap((node) => extractRunsFromNode(node));
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(html, 'text/html');
+  const rawRuns = Array.from(doc.body.childNodes).flatMap((node) => extractRunsFromNode(node));
   return mergeAdjacentRuns(rawRuns);
 };
 

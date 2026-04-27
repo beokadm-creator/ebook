@@ -38,6 +38,8 @@ interface AuthProviderProps {
   children: ReactNode;
 }
 
+const ADMIN_EMAILS = ['aaron@beoksolution.com'];
+
 export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
@@ -80,17 +82,21 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
             setRole(isAdmin ? 'admin' : null);
           } else {
             // 사용자 문서가 없으면 첫 로그인 시 자동 생성
+            // 보안 패치: 지정된 관리자 이메일만 admin 권한을 부여하고, 나머지는 null(일반 유저) 처리
+            const isAdminEmail = firebaseUser.email && ADMIN_EMAILS.includes(firebaseUser.email);
+            const assignedRole = isAdminEmail ? 'admin' : null;
+
             await setDoc(doc(db, 'users', firebaseUser.uid), {
               email: firebaseUser.email,
-              role: 'admin', // 첫 사용자는 자동으로 admin
+              role: assignedRole,
               displayName: firebaseUser.displayName || '',
               createdAt: new Date().toISOString(),
             });
             setUser({
               ...firebaseUser,
-              role: 'admin'
+              role: assignedRole
             });
-            setRole('admin');
+            setRole(assignedRole);
           }
         } catch (error) {
           console.error('Error fetching user data:', error);
